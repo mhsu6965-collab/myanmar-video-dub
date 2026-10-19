@@ -4,6 +4,7 @@ import json
 import asyncio
 import subprocess
 import tempfile
+from io import BytesIO
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import streamlit as st
@@ -34,8 +35,8 @@ FONT_CHOICES = [
 
 RESOLUTION_CHOICES = [
     "Original Resolution (မူရင်းအတိုင်း)",
-    "1080p Full HD (အကြည်လင်ဆုံး)",
-    "720p HD (ဖိုင်ဆိုဒ်သင့်တင့်)"
+    "720p HD (ဖိုင်ဆိုဒ်သင့်တင့် - အမြန်ဆုံး)",
+    "1080p Full HD (အကြည်လင်ဆုံး)"
 ]
 
 def register_uploaded_font(uploaded_file) -> str:
@@ -78,9 +79,9 @@ def get_video_info(file_path: str):
         h = h if h % 2 == 0 else h - 1
         fps_parts = stream.get("r_frame_rate", "30/1").split("/")
         fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 and float(fps_parts[1]) != 0 else 30.0
-        fps = min(60.0, max(15.0, fps))
+        fps = min(30.0, max(15.0, fps))
         dur = float(data["format"]["duration"])
-        return w, h, fps, dur
+        return max(2, w), max(2, h), fps, dur
     except Exception:
         return 1280, 720, 30.0, 0.0
 
@@ -90,7 +91,9 @@ def calculate_target_resolution(orig_w: int, orig_h: int, res_choice: str) -> tu
     elif "720p" in res_choice:
         target_short = 720
     else:
-        return max(2, orig_w - (orig_w % 2)), max(2, orig_h - (orig_h % 2))
+        w = orig_w - (orig_w % 2)
+        h = orig_h - (orig_h % 2)
+        return max(2, w), max(2, h)
 
     if orig_w <= orig_h:
         new_w = target_short
@@ -99,7 +102,9 @@ def calculate_target_resolution(orig_w: int, orig_h: int, res_choice: str) -> tu
         new_h = target_short
         new_w = int(round(orig_w * (target_short / float(orig_h))))
 
-    return new_w + (new_w % 2), new_h + (new_h % 2)
+    new_w = new_w - (new_w % 2)
+    new_h = new_h - (new_h % 2)
+    return max(2, new_w), max(2, new_h)
 
 def get_media_duration(file_path: str) -> float:
     cmd = [
@@ -122,8 +127,7 @@ def extract_compressed_audio(video_path: str) -> str:
     return temp_audio
 
 @st.cache_data(show_spinner=False)
-def extract_frame_bytes(video_path: str, time_sec: float) -> bytes:
-    """Video တင်လိုက်သည်နှင့် မျက်နှာပြင်ပေါ်တွင် သေချာပေါက် ပုံပေါ်စေရန် Frame ထုတ်ယူခြင်း"""
+def extract_frame_bytes(video_path: str, time_sec: float, file_size: int) -> bytes:
     frame_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
     cmd = [
         "ffmpeg", "-y", "-ss", f"{time_sec:.2f}", "-i", video_path,
@@ -136,46 +140,6 @@ def extract_frame_bytes(video_path: str, time_sec: float) -> bytes:
         os.remove(frame_file)
         return data
     return b""
-
-def generate_blur_preview_image(
-    frame_bytes: bytes,
-    enable_blur: bool,
-    x_pct: int,
-    y_pct: int,
-    w_pct: int,
-    h_pct: int,
-    blur_power: int,
-    font_path: str,
-    font_size_pt: int,
-    outline_w: float
-):
-    """Blur ဖုံးမည့်နေရာနှင့် မြန်မာစာတန်းထိုး နမူနာကို ပုံပေါ်တွင် တိုက်ရိုက်ဆွဲပြခြင်း"""
-    from io import BytesIO
-    img = Image.open(BytesIO(frame_bytes)).convert("RGBA")
-    iw, ih = img.size
-
-    bx_w = max(16, int(iw * (w_pct / 100.0)))
-    bx_h = max(16, int(ih * (h_pct / 100.0)))
-    bx_x = min(max(0, int((iw - bx_w) * (x_pct / 100.0))), iw - bx_w)
-    bx_y = min(max(0, int(ih * (y_pct / 100.0))), ih - bx_h)
-
-    if enable_blur:
-        crop = img.crop((bx_x, bx_y, bx_x + bx_w, bx_y + bx_h))
-        blurred = crop.filter(ImageFilter.GaussianBlur(radius=max(3, int(blur_power / 2))))
-        img.paste(blurred, (bx_x, bx_y))
-        draw = ImageDraw.Draw(img)
-        draw.rectangle([bx_x, bx_y, bx_x + bx_w, bx_y + bx_h], outline=(0, 255, 102, 255), width=max(2, iw // 200))
-        center_y = bx_y + (bx_h // 2)
-    else:
-        center_y = int(ih * (y_pct / 100.0))
-
-    # နမူနာ မြန်မာစာတန်းထိုး တစ်ကြောင်းကို ပုံပေါ်တွင် တိုက်ရိုက်ပြသပေးခြင်း
-    sample_png = render_myanmar_subtitle_rgba("မြန်မာစာတန်းထိုး နမူနာ", font_path, font_size_pt, int(round(outline_w)), iw)
-    sx = max(0, (iw - sample_png.width) // 2)
-    sy = min(max(4, center_y - (sample_png.height // 2)), ih - sample_png.height - 4)
-    img.alpha_composite(sample_png, (sx, sy))
-
-    return img.convert("RGB"), (bx_x, bx_y, bx_w, bx_h)
 
 def render_myanmar_subtitle_rgba(text: str, font_path: str, font_size_pt: int, stroke_px: int, vid_w: int) -> Image.Image:
     scaled_px = max(16, int(font_size_pt * (vid_w / 540.0)))
@@ -217,6 +181,43 @@ def render_myanmar_subtitle_rgba(text: str, font_path: str, font_size_pt: int, s
         canvas = canvas.resize((max_allowed_w, max(12, int(canvas.height * ratio))), Image.LANCZOS)
 
     return canvas
+
+def generate_blur_preview_image(
+    frame_bytes: bytes,
+    enable_blur: bool,
+    x_pct: int,
+    y_pct: int,
+    w_pct: int,
+    h_pct: int,
+    blur_power: int,
+    font_path: str,
+    font_size_pt: int,
+    outline_w: float
+):
+    img = Image.open(BytesIO(frame_bytes)).convert("RGBA")
+    iw, ih = img.size
+
+    bx_w = max(16, int(iw * (w_pct / 100.0)))
+    bx_h = max(16, int(ih * (h_pct / 100.0)))
+    bx_x = min(max(0, int((iw - bx_w) * (x_pct / 100.0))), iw - bx_w)
+    bx_y = min(max(0, int(ih * (y_pct / 100.0))), ih - bx_h)
+
+    if enable_blur:
+        crop = img.crop((bx_x, bx_y, bx_x + bx_w, bx_y + bx_h))
+        blurred = crop.filter(ImageFilter.GaussianBlur(radius=max(3, int(blur_power / 2))))
+        img.paste(blurred, (bx_x, bx_y))
+        draw = ImageDraw.Draw(img)
+        draw.rectangle([bx_x, bx_y, bx_x + bx_w, bx_y + bx_h], outline=(0, 255, 102, 255), width=max(2, iw // 200))
+        center_y = bx_y + (bx_h // 2)
+    else:
+        center_y = int(ih * (y_pct / 100.0))
+
+    sample_png = render_myanmar_subtitle_rgba("မြန်မာစာတန်းထိုး နမူနာ", font_path, font_size_pt, int(round(outline_w)), iw)
+    sx = max(0, (iw - sample_png.width) // 2)
+    sy = min(max(4, center_y - (sample_png.height // 2)), ih - sample_png.height - 4)
+    img.alpha_composite(sample_png, (sx, sy))
+
+    return img.convert("RGB"), (bx_x, bx_y, bx_w, bx_h)
 
 def split_into_short_lines(text: str, max_chars: int = 20) -> list:
     text = re.sub(r"\s+", " ", text).strip()
@@ -308,30 +309,33 @@ def render_smooth_final_video(
     progress_bar
 ) -> str:
     """
-    FFmpeg exit status 183 လုံးဝမတက်စေရန်နှင့် လုံးဝမထစ်စေရန်
-    Frame-by-Frame Direct Streaming Engine ဖြင့် Video Speed + Blur + မြန်မာစာတန်းထိုး ပေါင်းစပ်ခြင်း
+    flush of closed file နှင့် exit status 183 လုံးဝမတက်စေရန်
+    Safe Pipe Handling နှင့် Low-RAM Ultrafast Encoding သုံးထားသည်
     """
     out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
-    # မူရင်း Video ကို Target Resolution နှင့် Blur တစ်ခါတည်း တွက်ချက်ဖတ်ယူမည့် Decoder Pipe
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
-    if enable_blur:
-        bp = max(4, int(blur_power))
+    # FFmpeg boxblur အတွက် ဘောင်အကျယ်သည် အနည်းဆုံး blur radius ၏ ၂ ဆ ရှိရမည်
+    bp = min(int(blur_power), (bx_w // 2) - 1, (bx_h // 2) - 1)
+    bp = max(2, bp)
+
+    if enable_blur and bx_w >= 12 and bx_h >= 12:
         decode_vf = (
-            f"fps={vid_fps:.2f},scale={vid_w}:{vid_h}:flags=lanczos,setsar=1,"
-            f"split=2[vm][vc];[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},boxblur={bp}:2[vb];"
-            f"[vm][vb]overlay={bx_x}:{bx_y},format=rgb24"
+            f"fps={vid_fps:.2f},scale={vid_w}:{vid_h}:flags=bicubic,setsar=1,format=rgb24,"
+            f"split=2[vm][vc];[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},boxblur={bp}:1[vb];"
+            f"[vm][vb]overlay={bx_x}:{bx_y}"
         )
-        center_y = bx_y + (bx_h // 2)
     else:
-        decode_vf = f"fps={vid_fps:.2f},scale={vid_w}:{vid_h}:flags=lanczos,setsar=1,format=rgb24"
-        center_y = bx_y + (bx_h // 2)
+        decode_vf = f"fps={vid_fps:.2f},scale={vid_w}:{vid_h}:flags=bicubic,setsar=1,format=rgb24"
+
+    center_y = bx_y + (bx_h // 2)
 
     decoder_cmd = [
         "ffmpeg", "-v", "error", "-i", video_path,
         "-vf", decode_vf,
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"
     ]
+    # Streamlit Cloud 1GB RAM ကန့်သတ်ချက်နှင့် ကိုက်ညီစေရန် -preset ultrafast -threads 2 သုံးထားသည်
     encoder_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -339,18 +343,17 @@ def render_smooth_final_video(
         "-i", "pipe:0",
         "-i", audio_path,
         "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p",
         "-c:a", "aac", "-b:a", "192k", "-shortest", out_video
     ]
 
-    dec_proc = subprocess.Popen(decoder_cmd, stdout=subprocess.PIPE, bufsize=vid_w * vid_h * 3 * 4)
-    enc_proc = subprocess.Popen(encoder_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=vid_w * vid_h * 3 * 4)
+    dec_proc = subprocess.Popen(decoder_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    enc_proc = subprocess.Popen(encoder_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
 
     frame_bytes_len = vid_w * vid_h * 3
     total_out_dur = sum(item["target_dur"] for item in timeline)
     total_out_frames = max(1, int(round(total_out_dur * vid_fps)))
 
-    # Output အချိန် (t_out) မှ မူရင်း Video အချိန် (t_in) သို့ အတိအကျ ပြောင်းလဲပေးသည့် Time-Warp Map
     out_cursor = 0.0
     time_segments = []
     for item in timeline:
@@ -382,7 +385,6 @@ def render_smooth_final_video(
         t_in = seg["in_start"] + ratio * (seg["in_end"] - seg["in_start"])
         target_in_idx = max(0, int(round(t_in * vid_fps)))
 
-        # လိုအပ်သော မူရင်း Frame ရောက်သည်အထိ ဆွဲထုတ်ခြင်း (Memory မပြည့်ပါ၊ လုံးဝမထစ်ပါ)
         while not eof_reached and curr_in_frame_idx < target_in_idx:
             raw = dec_proc.stdout.read(frame_bytes_len)
             if len(raw) < frame_bytes_len:
@@ -394,7 +396,6 @@ def render_smooth_final_video(
         if curr_in_frame_bytes is None:
             break
 
-        # လက်ရှိ အချိန်နှင့် ကိုက်ညီသော မြန်မာစာတန်းထိုး ရှိမရှိ စစ်ဆေးခြင်း
         while sub_ptr < num_subs and sub_overlays[sub_ptr]["end"] < t_out:
             sub_ptr += 1
 
@@ -408,29 +409,46 @@ def render_smooth_final_video(
             ox = max(0, (vid_w - sub_rgba.width) // 2)
             oy = min(max(4, center_y - (sub_rgba.height // 2)), vid_h - sub_rgba.height - 4)
             frame_img.paste(sub_rgba, (ox, oy), sub_rgba)
-            enc_proc.stdin.write(frame_img.tobytes())
+            frame_to_write = frame_img.tobytes()
         else:
-            enc_proc.stdin.write(curr_in_frame_bytes)
+            frame_to_write = curr_in_frame_bytes
 
-        if out_idx % 30 == 0:
+        try:
+            enc_proc.stdin.write(frame_to_write)
+        except BrokenPipeError:
+            break
+
+        if out_idx % 25 == 0:
             progress_bar.progress(min(0.99, out_idx / float(total_out_frames)))
 
+    # flush of closed file လုံးဝမဖြစ်စေရန် communicate() မသုံးဘဲ စနစ်တကျ ပိတ်သိမ်းခြင်း
     try:
-        enc_proc.stdin.close()
+        if enc_proc.stdin:
+            enc_proc.stdin.close()
     except Exception:
         pass
-    dec_proc.stdout.close()
+
+    try:
+        if dec_proc.stdout:
+            dec_proc.stdout.close()
+    except Exception:
+        pass
+
+    dec_err = dec_proc.stderr.read().decode("utf-8", errors="ignore") if dec_proc.stderr else ""
+    enc_err = enc_proc.stderr.read().decode("utf-8", errors="ignore") if enc_proc.stderr else ""
+
     dec_proc.wait()
-    _, err_out = enc_proc.communicate()
-    if enc_proc.returncode != 0:
-        raise RuntimeError(f"FFmpeg Encoding Error: {err_out.decode('utf-8', errors='ignore')}")
+    enc_proc.wait()
+
+    if enc_proc.returncode != 0 or not os.path.exists(out_video) or os.path.getsize(out_video) == 0:
+        raise RuntimeError(f"FFmpeg Process Error:\nDecoder: {dec_err}\nEncoder: {enc_err}")
 
     progress_bar.progress(1.0)
     return out_video
 
 # Streamlit UI တည်ဆောက်ခြင်း
 st.title("🎬 Pro Video Sync + 🌫️ Live Blur Preview + 🇲🇲 Myanmar Font Studio")
-st.caption("Exit Status 183 Error ကင်းစင်ပြီး လုံးဝမထစ်သည့် Direct Frame-Pipe Sync စနစ်")
+st.caption("24/7 Active Streamlit Cloud Studio (Smooth Frame-Sync + Custom Fonts + HD Output)")
 
 col1, col2 = st.columns([1, 1])
 
@@ -438,7 +456,6 @@ with col1:
     uploaded_video = st.file_uploader("၁။ မူရင်း Video Upload တင်ရန်", type=["mp4", "mov", "mkv", "webm"])
     video_temp_path = None
     if uploaded_video:
-        # တရုတ်စာလုံး သို့မဟုတ် အထူးအက္ခရာများကြောင့် FFmpeg Error မတက်စေရန် သန့်ရှင်းသော နာမည်ဖြင့် သိမ်းသည်
         video_temp_path = os.path.join(tempfile.gettempdir(), "input_source_video.mp4")
         with open(video_temp_path, "wb") as f:
             f.write(uploaded_video.getbuffer())
@@ -469,7 +486,7 @@ with col1:
     if video_temp_path:
         orig_w, orig_h, vid_fps, vid_dur = get_video_info(video_temp_path)
         preview_sec = st.slider("စာတန်းပါသော စက္ကန့်ကို ရွှေ့ကြည့်ရန်", 0.5, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
-        frame_bytes = extract_frame_bytes(video_temp_path, preview_sec)
+        frame_bytes = extract_frame_bytes(video_temp_path, preview_sec, os.path.getsize(video_temp_path))
         if frame_bytes:
             preview_img, _ = generate_blur_preview_image(
                 frame_bytes, enable_blur, blur_x_pct, blur_y_pct, blur_w_pct, blur_h_pct,
