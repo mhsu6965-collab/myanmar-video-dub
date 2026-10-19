@@ -61,6 +61,10 @@ def find_font_path(font_choice: str, custom_font_path: str = None) -> str:
         return fpath
     return "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Bold.ttf"
 
+def align_to_8(val: int) -> int:
+    """ဖုန်း Browser အားလုံးတွင် Video ဖွင့်၍ရစေရန် Resolution ကို 8 ဖြင့် စား၍ပြတ်သော ကိန်းဖြစ်အောင် ညှိခြင်း"""
+    return max(16, int(round(val / 8.0)) * 8)
+
 def get_video_info(file_path: str):
     cmd = [
         "ffprobe", "-v", "error", "-select_streams", "v:0",
@@ -76,13 +80,13 @@ def get_video_info(file_path: str):
         rot = int(stream.get("tags", {}).get("rotate", 0))
         if rot in (90, 270, -90, -270):
             w, h = h, w
-        w = w if w % 2 == 0 else w - 1
-        h = h if h % 2 == 0 else h - 1
+        w = align_to_8(w)
+        h = align_to_8(h)
         fps_parts = stream.get("r_frame_rate", "30/1").split("/")
         fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 and float(fps_parts[1]) != 0 else 30.0
         fps = min(30.0, max(15.0, fps))
         dur = float(data["format"]["duration"])
-        return max(2, w), max(2, h), fps, dur
+        return w, h, fps, dur
     except Exception:
         return 1280, 720, 30.0, 0.0
 
@@ -92,9 +96,7 @@ def calculate_target_resolution(orig_w: int, orig_h: int, res_choice: str) -> tu
     elif "720p" in res_choice:
         target_short = 720
     else:
-        w = orig_w - (orig_w % 2)
-        h = orig_h - (orig_h % 2)
-        return max(2, w), max(2, h)
+        return align_to_8(orig_w), align_to_8(orig_h)
 
     if orig_w <= orig_h:
         new_w = target_short
@@ -103,9 +105,7 @@ def calculate_target_resolution(orig_w: int, orig_h: int, res_choice: str) -> tu
         new_h = target_short
         new_w = int(round(orig_w * (target_short / float(orig_h))))
 
-    new_w = new_w - (new_w % 2)
-    new_h = new_h - (new_h % 2)
-    return max(2, new_w), max(2, new_h)
+    return align_to_8(new_w), align_to_8(new_h)
 
 def get_media_duration(file_path: str) -> float:
     cmd = [
@@ -278,17 +278,12 @@ def translate_segments_with_fallback(
     target_lang: str,
     status_box
 ):
-    """
-    503 UNAVAILABLE (Server ကျပ်ခြင်း) ဖြစ်ပေါ်ပါက အလိုအလျောက် အခြား Gemini Model များနှင့်
-    Groq Llama-3.3-70B သို့ ပြောင်းလဲပြီး လုံးဝ Error မတက်အောင် ဘာသာပြန်ပေးသည့် စနစ်
-    """
     fallback_models = [
         preferred_model.strip(),
         "gemini-3.1-flash-lite-preview",
         "gemini-3-flash-preview",
         "gemini-2.5-flash"
     ]
-    # 중복 모델 제거
     model_chain = []
     for m in fallback_models:
         if m not in model_chain:
@@ -331,7 +326,6 @@ def translate_segments_with_fallback(
             if translated_success:
                 break
 
-        # အကယ်၍ Gemini Model အားလုံး 503 Server ကျပ်နေပါက Groq Llama-3.3-70B ဖြင့် အလိုအလျောက် ဘာသာပြန်ပေးမည်
         if not translated_success:
             status_box.write("🔄 Gemini Server ကျပ်နေသဖြင့် Groq (Llama-3.3-70B) Backup စနစ်ဖြင့် ဘာသာပြန်နေပါသည်...")
             try:
@@ -396,7 +390,8 @@ def render_smooth_final_video(
     blur_power: int,
     progress_bar
 ) -> str:
-    out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+    raw_out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+    web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
     bp = min(int(blur_power), (bx_w // 2) - 1, (bx_h // 2) - 1)
@@ -418,15 +413,15 @@ def render_smooth_final_video(
         "-vf", decode_vf,
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"
     ]
+    # Mobile/Web Browser အားလုံးတွင် ချက်ချင်းပွင့်စေရန် -profile:v main -pix_fmt yuv420p သုံးထားသည်
     encoder_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-f", "rawvideo", "-vcodec", "rawvideo",
         "-s", f"{vid_w}x{vid_h}", "-pix_fmt", "rgb24", "-r", f"{vid_fps:.2f}",
         "-i", "pipe:0",
-        "-i", audio_path,
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20", "-threads", "2", "-pix_fmt", "yuv420p",
-        "-c:a", "aac", "-b:a", "192k", "-shortest", out_video
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
+        "-profile:v", "main", "-pix_fmt", "yuv420p", "-threads", "2",
+        raw_out_video
     ]
 
     dec_proc = subprocess.Popen(decoder_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -454,6 +449,7 @@ def render_smooth_final_video(
     seg_ptr = 0
     sub_ptr = 0
     num_subs = len(sub_overlays)
+    frames_written = 0
 
     for out_idx in range(total_out_frames):
         t_out = out_idx / float(vid_fps)
@@ -497,11 +493,12 @@ def render_smooth_final_video(
 
         try:
             enc_proc.stdin.write(frame_to_write)
+            frames_written += 1
         except BrokenPipeError:
             break
 
         if out_idx % 25 == 0:
-            progress_bar.progress(min(0.99, out_idx / float(total_out_frames)))
+            progress_bar.progress(min(0.95, out_idx / float(total_out_frames)))
 
     try:
         if enc_proc.stdin:
@@ -521,15 +518,31 @@ def render_smooth_final_video(
     dec_proc.wait()
     enc_proc.wait()
 
-    if enc_proc.returncode != 0 or not os.path.exists(out_video) or os.path.getsize(out_video) == 0:
-        raise RuntimeError(f"FFmpeg Process Error:\nDecoder: {dec_err}\nEncoder: {enc_err}")
+    if frames_written == 0 or not os.path.exists(raw_out_video) or os.path.getsize(raw_out_video) < 1000:
+        raise RuntimeError(f"Video Render မအောင်မြင်ပါ:\nDecoder: {dec_err}\nEncoder: {enc_err}")
+
+    # အသံနှင့် ဗီဒီယိုကို ပေါင်းစပ်ပြီး Web Browser တွင် ချက်ချင်းပွင့်စေမည့် -movflags +faststart ထည့်သွင်းခြင်း
+    mux_cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-i", raw_out_video,
+        "-i", audio_path,
+        "-map", "0:v:0", "-map", "1:a:0",
+        "-c:v", "copy",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        "-shortest", web_ready_video
+    ]
+    subprocess.run(mux_cmd, check=True)
+
+    if os.path.exists(raw_out_video):
+        os.remove(raw_out_video)
 
     progress_bar.progress(1.0)
-    return out_video
+    return web_ready_video
 
 # Streamlit UI တည်ဆောက်ခြင်း
 st.title("🎬 Pro Video Sync + 🌫️ Live Blur Preview + 🇲🇲 Myanmar Font Studio")
-st.caption("24/7 Active Streamlit Cloud Studio (Auto 503-Fallback + Smooth Frame-Sync + HD Output)")
+st.caption("24/7 Active Streamlit Cloud Studio (Web-Ready FastStart Player + Auto 503-Fallback + HD Output)")
 
 col1, col2 = st.columns([1, 1])
 
@@ -690,7 +703,7 @@ with col2:
                 bx_x = min(max(0, int((vid_w - bx_w) * (blur_x_pct / 100.0))), vid_w - bx_w)
                 bx_y = min(max(0, int(vid_h * (blur_y_pct / 100.0))), vid_h - bx_h)
 
-                out_video = render_smooth_final_video(
+                out_video_path = render_smooth_final_video(
                     video_path=video_temp_path,
                     audio_path=final_audio,
                     timeline=timeline,
@@ -704,14 +717,33 @@ with col2:
                     progress_bar=p_bar
                 )
 
-                status.update(label=f"✅ အားလုံး အောင်မြင်စွာ ပြီးဆုံးပါပြီ! ({vid_w}x{vid_h})", state="complete", expanded=False)
+                # Video ကို Memory (Session State) ထဲသို့ ဖတ်ယူထားသဖြင့် Player တွင် သေချာပေါက် ပွင့်လာမည်
+                with open(out_video_path, "rb") as vf:
+                    st.session_state["final_video_bytes"] = vf.read()
+                st.session_state["final_srt_content"] = srt_content
+                st.session_state["final_res_label"] = f"{vid_w}x{vid_h}"
 
-                st.subheader("🎬 Final Video")
-                st.video(out_video)
-                with open(out_video, "rb") as vf:
-                    st.download_button("📥 Final Video Download ဆွဲရန်", vf, file_name="dubbed_video.mp4", mime="video/mp4", use_container_width=True)
-                st.download_button("📥 SRT Subtitle Download ဆွဲရန်", srt_content, file_name="subtitle.srt", mime="text/plain", use_container_width=True)
+                status.update(label=f"✅ အားလုံး အောင်မြင်စွာ ပြီးဆုံးပါပြီ! ({vid_w}x{vid_h})", state="complete", expanded=False)
 
             except Exception as e:
                 status.update(label="❌ Error ဖြစ်ပွားပါသည်", state="error")
                 st.error(f"Error အသေးစိတ်: {e}")
+
+    # Video ပြီးဆုံးသွားပါက မျက်နှာပြင်ပေါ်တွင် အမြဲတမ်း ပြသပေးထားမည်
+    if "final_video_bytes" in st.session_state and st.session_state["final_video_bytes"]:
+        st.subheader(f"🎬 Final Video ({st.session_state.get('final_res_label', '')})")
+        st.video(st.session_state["final_video_bytes"], format="video/mp4")
+        st.download_button(
+            "📥 Final Video Download ဆွဲရန်",
+            data=st.session_state["final_video_bytes"],
+            file_name="myanmar_dubbed_video.mp4",
+            mime="video/mp4",
+            use_container_width=True
+        )
+        st.download_button(
+            "📥 SRT Subtitle Download ဆွဲရန်",
+            data=st.session_state.get("final_srt_content", ""),
+            file_name="myanmar_subtitle.srt",
+            mime="text/plain",
+            use_container_width=True
+        )
