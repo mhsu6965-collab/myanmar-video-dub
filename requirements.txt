@@ -1,0 +1,7 @@
+streamlit
+streamlit-drawable-canvas-fix
+groq
+google-genai
+edge-tts
+pillow>=10.2.0,<11.0.0
+numpy
