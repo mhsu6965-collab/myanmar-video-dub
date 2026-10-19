@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import asyncio
 import subprocess
 import tempfile
@@ -269,6 +270,93 @@ def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_d
             merged.append({"start": start, "end": end, "text": text})
     return merged
 
+def translate_segments_with_fallback(
+    gemini_client,
+    groq_client,
+    preferred_model: str,
+    segments: list,
+    target_lang: str,
+    status_box
+):
+    """
+    503 UNAVAILABLE (Server ကျပ်ခြင်း) ဖြစ်ပေါ်ပါက အလိုအလျောက် အခြား Gemini Model များနှင့်
+    Groq Llama-3.3-70B သို့ ပြောင်းလဲပြီး လုံးဝ Error မတက်အောင် ဘာသာပြန်ပေးသည့် စနစ်
+    """
+    fallback_models = [
+        preferred_model.strip(),
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3-flash-preview",
+        "gemini-2.5-flash"
+    ]
+    # 중복 모델 제거
+    model_chain = []
+    for m in fallback_models:
+        if m not in model_chain:
+            model_chain.append(m)
+
+    batch_size = 25
+    for i in range(0, len(segments), batch_size):
+        batch = segments[i:i + batch_size]
+        payload = [{"id": idx, "text": s["text"]} for idx, s in enumerate(batch)]
+        prompt = (
+            f"Translate each 'text' field into natural, concise spoken {target_lang} for video dubbing. "
+            f"Return ONLY a JSON list of objects with 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"
+        )
+
+        translated_success = False
+        for model_name in model_chain:
+            for attempt in range(2):
+                try:
+                    resp = gemini_client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(response_mime_type="application/json")
+                    )
+                    parsed = json.loads(resp.text.strip())
+                    if isinstance(parsed, dict) and "translations" in parsed:
+                        parsed = parsed["translations"]
+                    t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if "id" in item}
+                    for idx, s in enumerate(batch):
+                        s["translated"] = t_map.get(idx, s["text"])
+                    translated_success = True
+                    break
+                except Exception as e:
+                    err_str = str(e)
+                    if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                        status_box.write(f"⚠️ `{model_name}` Server ခေတ္တကျပ်နေသဖြင့် အရန် Model ဖြင့် အလိုအလျောက် ပြောင်းလဲချိတ်ဆက်နေပါသည်...")
+                        time.sleep(2)
+                        continue
+                    else:
+                        break
+            if translated_success:
+                break
+
+        # အကယ်၍ Gemini Model အားလုံး 503 Server ကျပ်နေပါက Groq Llama-3.3-70B ဖြင့် အလိုအလျောက် ဘာသာပြန်ပေးမည်
+        if not translated_success:
+            status_box.write("🔄 Gemini Server ကျပ်နေသဖြင့် Groq (Llama-3.3-70B) Backup စနစ်ဖြင့် ဘာသာပြန်နေပါသည်...")
+            try:
+                groq_resp = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": f"You are a professional video dubbing translator. Translate accurately into natural spoken {target_lang}. Output valid JSON only."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Return a JSON object with key 'items' containing a list of objects with 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"
+                        }
+                    ],
+                    response_format={"type": "json_object"}
+                )
+                g_data = json.loads(groq_resp.choices[0].message.content)
+                g_list = g_data.get("items", g_data) if isinstance(g_data, dict) else g_data
+                t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in g_list if isinstance(item, dict) and "id" in item}
+                for idx, s in enumerate(batch):
+                    s["translated"] = t_map.get(idx, s["text"])
+            except Exception as final_err:
+                raise RuntimeError(f"ဘာသာပြန်ရာတွင် အခက်အခဲဖြစ်ပွားပါသည်: {final_err}")
+
 async def synthesize_all_tts(segments, voice_id, rate_str, pitch_str):
     sem = asyncio.Semaphore(6)
     async def _one(idx, text):
@@ -308,14 +396,9 @@ def render_smooth_final_video(
     blur_power: int,
     progress_bar
 ) -> str:
-    """
-    flush of closed file နှင့် exit status 183 လုံးဝမတက်စေရန်
-    Safe Pipe Handling နှင့် Low-RAM Ultrafast Encoding သုံးထားသည်
-    """
     out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
-    # FFmpeg boxblur အတွက် ဘောင်အကျယ်သည် အနည်းဆုံး blur radius ၏ ၂ ဆ ရှိရမည်
     bp = min(int(blur_power), (bx_w // 2) - 1, (bx_h // 2) - 1)
     bp = max(2, bp)
 
@@ -335,7 +418,6 @@ def render_smooth_final_video(
         "-vf", decode_vf,
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"
     ]
-    # Streamlit Cloud 1GB RAM ကန့်သတ်ချက်နှင့် ကိုက်ညီစေရန် -preset ultrafast -threads 2 သုံးထားသည်
     encoder_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -421,7 +503,6 @@ def render_smooth_final_video(
         if out_idx % 25 == 0:
             progress_bar.progress(min(0.99, out_idx / float(total_out_frames)))
 
-    # flush of closed file လုံးဝမဖြစ်စေရန် communicate() မသုံးဘဲ စနစ်တကျ ပိတ်သိမ်းခြင်း
     try:
         if enc_proc.stdin:
             enc_proc.stdin.close()
@@ -448,7 +529,7 @@ def render_smooth_final_video(
 
 # Streamlit UI တည်ဆောက်ခြင်း
 st.title("🎬 Pro Video Sync + 🌫️ Live Blur Preview + 🇲🇲 Myanmar Font Studio")
-st.caption("24/7 Active Streamlit Cloud Studio (Smooth Frame-Sync + Custom Fonts + HD Output)")
+st.caption("24/7 Active Streamlit Cloud Studio (Auto 503-Fallback + Smooth Frame-Sync + HD Output)")
 
 col1, col2 = st.columns([1, 1])
 
@@ -499,7 +580,10 @@ with col1:
     default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
     groq_key = st.text_input("Groq API Key", value=default_groq, type="password")
     gemini_key = st.text_input("Gemini API Key", value=default_gemini, type="password")
-    gemini_model = st.selectbox("Gemini Model", ["gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"])
+    gemini_model = st.selectbox(
+        "Gemini Model (Server ကျပ်ပါက အလိုအလျောက် အရန် Model ပြောင်းပေးမည်)",
+        ["gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-2.5-flash"]
+    )
     target_lang = st.selectbox("ဘာသာပြန်မည့် ဘာသာစကား", ["Burmese (Myanmar)", "English", "Thai", "Japanese", "Chinese"])
     voice_label = st.selectbox("TTS အသံ ရွေးချယ်ရန်", list(VOICES.keys()))
 
@@ -534,22 +618,16 @@ with col2:
                 raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
                 segments = merge_close_whisper_segments(raw_segs)
 
-                status.write(f"၂/၅ - စာကြောင်း ({len(segments)}) ကြောင်းကို Gemini ဖြင့် ဘာသာပြန်နေပါသည်...")
+                status.write(f"၂/၅ - စာကြောင်း ({len(segments)}) ကြောင်းကို AI ဖြင့် ဘာသာပြန်နေပါသည်...")
                 gemini_client = genai.Client(api_key=gemini_key.strip())
-                payload = [{"id": i, "text": s["text"]} for i, s in enumerate(segments)]
-                prompt = (
-                    f"Translate each 'text' field into natural, concise spoken {target_lang} for video dubbing. "
-                    f"Return ONLY a JSON list of objects with 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"
+                translate_segments_with_fallback(
+                    gemini_client=gemini_client,
+                    groq_client=groq_client,
+                    preferred_model=gemini_model,
+                    segments=segments,
+                    target_lang=target_lang,
+                    status_box=status
                 )
-                resp = gemini_client.models.generate_content(
-                    model=gemini_model,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(response_mime_type="application/json")
-                )
-                parsed = json.loads(resp.text.strip())
-                t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if "id" in item}
-                for i, s in enumerate(segments):
-                    s["translated"] = t_map.get(i, s["text"])
 
                 status.write("၃/၅ - Edge-TTS အသံများကို ပြိုင်တူ ထုတ်ယူနေပါသည်...")
                 safe_speed = max(-99, min(100, int(speed_pct)))
