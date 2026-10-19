@@ -62,7 +62,6 @@ def find_font_path(font_choice: str, custom_font_path: str = None) -> str:
     return "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Bold.ttf"
 
 def align_to_8(val: int) -> int:
-    """ဖုန်း Browser အားလုံးတွင် Video ဖွင့်၍ရစေရန် Resolution ကို 8 ဖြင့် စား၍ပြတ်သော ကိန်းဖြစ်အောင် ညှိခြင်း"""
     return max(16, int(round(val / 8.0)) * 8)
 
 def get_video_info(file_path: str):
@@ -394,13 +393,13 @@ def render_smooth_final_video(
     web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
-    bp = min(int(blur_power), (bx_w // 2) - 1, (bx_h // 2) - 1)
-    bp = max(2, bp)
+    # boxblur အစား ဘောင်အရွယ်အစားမရွေး ၁၀၀% အလုပ်လုပ်သော gblur (Gaussian Blur) သုံးထားသည်
+    sigma_val = max(2.0, float(blur_power))
 
-    if enable_blur and bx_w >= 12 and bx_h >= 12:
+    if enable_blur and bx_w >= 8 and bx_h >= 8:
         decode_vf = (
             f"fps={vid_fps:.2f},scale={vid_w}:{vid_h}:flags=bicubic,setsar=1,format=rgb24,"
-            f"split=2[vm][vc];[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},boxblur={bp}:1[vb];"
+            f"split=2[vm][vc];[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},gblur=sigma={sigma_val:.1f}[vb];"
             f"[vm][vb]overlay={bx_x}:{bx_y}"
         )
     else:
@@ -413,7 +412,6 @@ def render_smooth_final_video(
         "-vf", decode_vf,
         "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"
     ]
-    # Mobile/Web Browser အားလုံးတွင် ချက်ချင်းပွင့်စေရန် -profile:v main -pix_fmt yuv420p သုံးထားသည်
     encoder_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -521,7 +519,6 @@ def render_smooth_final_video(
     if frames_written == 0 or not os.path.exists(raw_out_video) or os.path.getsize(raw_out_video) < 1000:
         raise RuntimeError(f"Video Render မအောင်မြင်ပါ:\nDecoder: {dec_err}\nEncoder: {enc_err}")
 
-    # အသံနှင့် ဗီဒီယိုကို ပေါင်းစပ်ပြီး Web Browser တွင် ချက်ချင်းပွင့်စေမည့် -movflags +faststart ထည့်သွင်းခြင်း
     mux_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-i", raw_out_video,
@@ -542,7 +539,7 @@ def render_smooth_final_video(
 
 # Streamlit UI တည်ဆောက်ခြင်း
 st.title("🎬 Pro Video Sync + 🌫️ Live Blur Preview + 🇲🇲 Myanmar Font Studio")
-st.caption("24/7 Active Streamlit Cloud Studio (Web-Ready FastStart Player + Auto 503-Fallback + HD Output)")
+st.caption("24/7 Active Streamlit Cloud Studio (Gaussian Blur + FastStart Player + Auto 503-Fallback)")
 
 col1, col2 = st.columns([1, 1])
 
@@ -717,7 +714,6 @@ with col2:
                     progress_bar=p_bar
                 )
 
-                # Video ကို Memory (Session State) ထဲသို့ ဖတ်ယူထားသဖြင့် Player တွင် သေချာပေါက် ပွင့်လာမည်
                 with open(out_video_path, "rb") as vf:
                     st.session_state["final_video_bytes"] = vf.read()
                 st.session_state["final_srt_content"] = srt_content
@@ -729,7 +725,6 @@ with col2:
                 status.update(label="❌ Error ဖြစ်ပွားပါသည်", state="error")
                 st.error(f"Error အသေးစိတ်: {e}")
 
-    # Video ပြီးဆုံးသွားပါက မျက်နှာပြင်ပေါ်တွင် အမြဲတမ်း ပြသပေးထားမည်
     if "final_video_bytes" in st.session_state and st.session_state["final_video_bytes"]:
         st.subheader(f"🎬 Final Video ({st.session_state.get('final_res_label', '')})")
         st.video(st.session_state["final_video_bytes"], format="video/mp4")
@@ -746,4 +741,4 @@ with col2:
             file_name="myanmar_subtitle.srt",
             mime="text/plain",
             use_container_width=True
-        )
+                        )
