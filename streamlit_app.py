@@ -40,6 +40,44 @@ RESOLUTION_CHOICES = [
     "1080p Full HD (အကြည်လင်ဆုံး)"
 ]
 
+def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
+    """Hex အရောင်ကုဒ် (#FFFFFF) ကို RGBA Tuple သို့ ပြောင်းလဲခြင်း"""
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) == 6:
+        r = int(hex_color[0:2], 16)
+        g = int(hex_color[2:4], 16)
+        b = int(hex_color[4:6], 16)
+        return (r, g, b, alpha)
+    return (255, 255, 255, alpha)
+
+def clean_text_for_myanmar_font(text: str) -> str:
+    """
+    မြန်မာဖောင့်များတွင် လေးထောင့်ကွက် (Tofu □) ပေါ်စေသည့် Zero-width characters များ၊
+    Emoji များနှင့် အထူးသင်္ကေတများကို ဖယ်ရှားသန့်စင်ပေးခြင်း
+    """
+    if not text:
+        return ""
+    # ၁။ မမြင်ရသော လေးထောင့်ကွက်ဖြစ်စေသည့် Unicode Control စာလုံးများ ဖယ်ရှားခြင်း
+    text = re.sub(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u202a-\u202e\u2060-\u206f]", "", text)
+
+    # ၂။ မြန်မာဖောင့်တွင် မပါတတ်သော Smart Quotes နှင့် Dash များကို ရိုးရိုး Space/ပုဒ်ဖြတ်ဖြင့် အစားထိုးခြင်း
+    replacements = {
+        "“": "", "”": "", "‘": "", "’": "", "\"": "", "'": "",
+        "—": " ", "–": " ", "…": "", "•": "", "*": "", "#": "",
+        "~": "", "`": "", "^": "", "|": "", "<": "", ">": ""
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+
+    # ၃။ အင်္ဂလိပ်ဂဏန်း (0-9) များကို မြန်မာဖောင့်တိုင်းတွင် ပါဝင်သော မြန်မာဂဏန်း (၀-၉) သို့ ပြောင်းလဲခြင်း
+    eng_to_mm_digits = str.maketrans("0123456789", "၀၁၂၃၄၅၆၇၈၉")
+    text = text.translate(eng_to_mm_digits)
+
+    # ၄။ မြန်မာအက္ခရာ (\u1000-\u109F, \uAA60-\uAA7F, \uA9E0-\uA9FF)၊ အင်္ဂလိပ်စာလုံးနှင့် အခြေခံပုဒ်ဖြတ်များသာ ချန်ထားခြင်း
+    text = re.sub(r"[^\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FFa-zA-Z\s,\.\!\?\(\)\-\+/\:]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
 def register_uploaded_font(uploaded_file) -> str:
     if uploaded_file is None:
         return None
@@ -141,7 +179,23 @@ def extract_frame_bytes(video_path: str, time_sec: float, file_size: int) -> byt
         return data
     return b""
 
-def render_myanmar_subtitle_rgba(text: str, font_path: str, font_size_pt: int, stroke_px: int, vid_w: int) -> Image.Image:
+def render_myanmar_subtitle_rgba(
+    text: str,
+    font_path: str,
+    font_size_pt: int,
+    stroke_px: int,
+    vid_w: int,
+    text_hex: str = "#FFFFFF",
+    outline_hex: str = "#000000"
+) -> Image.Image:
+    """
+    လေးထောင့်ကွက်များ သန့်စင်ပြီး စိတ်ကြိုက် စာသားအရောင် (Text Color) နှင့်
+    အနားသတ်လိုင်းအရောင် (Outline Color) တို့ဖြင့် မြန်မာစာတန်းထိုး ပုံဖော်ခြင်း
+    """
+    clean_txt = clean_text_for_myanmar_font(text)
+    if not clean_txt:
+        clean_txt = " "
+
     scaled_px = max(16, int(font_size_pt * (vid_w / 540.0)))
     try:
         font = ImageFont.truetype(font_path, scaled_px)
@@ -151,7 +205,7 @@ def render_myanmar_subtitle_rgba(text: str, font_path: str, font_size_pt: int, s
     dummy_img = Image.new("RGBA", (10, 10))
     d_draw = ImageDraw.Draw(dummy_img)
     try:
-        bbox = d_draw.textbbox((0, 0), text, font=font)
+        bbox = d_draw.textbbox((0, 0), clean_txt, font=font)
         tw = max(10, bbox[2] - bbox[0])
         th = max(10, bbox[3] - bbox[1])
         offset_x = -bbox[0]
@@ -168,12 +222,15 @@ def render_myanmar_subtitle_rgba(text: str, font_path: str, font_size_pt: int, s
     x_pos = (sp * 2) + 12 + offset_x
     y_pos = (sp * 2) + 10 + offset_y
 
+    text_rgba = hex_to_rgba(text_hex, 255)
+    outline_rgba = hex_to_rgba(outline_hex, 255)
+
     for ox in range(-sp, sp + 1):
         for oy in range(-sp, sp + 1):
             if ox != 0 or oy != 0:
-                draw.text((x_pos + ox, y_pos + oy), text, font=font, fill=(0, 0, 0, 255))
+                draw.text((x_pos + ox, y_pos + oy), clean_txt, font=font, fill=outline_rgba)
 
-    draw.text((x_pos, y_pos), text, font=font, fill=(255, 255, 255, 255))
+    draw.text((x_pos, y_pos), clean_txt, font=font, fill=text_rgba)
 
     max_allowed_w = int(vid_w * 0.94)
     if canvas.width > max_allowed_w:
@@ -192,7 +249,9 @@ def generate_blur_preview_image(
     blur_power: int,
     font_path: str,
     font_size_pt: int,
-    outline_w: float
+    outline_w: float,
+    text_color_hex: str,
+    outline_color_hex: str
 ):
     img = Image.open(BytesIO(frame_bytes)).convert("RGBA")
     iw, ih = img.size
@@ -212,7 +271,11 @@ def generate_blur_preview_image(
     else:
         center_y = int(ih * (y_pct / 100.0))
 
-    sample_png = render_myanmar_subtitle_rgba("မြန်မာစာတန်းထိုး နမူနာ", font_path, font_size_pt, int(round(outline_w)), iw)
+    sample_png = render_myanmar_subtitle_rgba(
+        "မြန်မာစာတန်းထိုး အရောင်နမူနာ",
+        font_path, font_size_pt, int(round(outline_w)), iw,
+        text_color_hex, outline_color_hex
+    )
     sx = max(0, (iw - sample_png.width) // 2)
     sy = min(max(4, center_y - (sample_png.height // 2)), ih - sample_png.height - 4)
     img.alpha_composite(sample_png, (sx, sy))
@@ -220,7 +283,7 @@ def generate_blur_preview_image(
     return img.convert("RGB"), (bx_x, bx_y, bx_w, bx_h)
 
 def split_into_short_lines(text: str, max_chars: int = 20) -> list:
-    text = re.sub(r"\s+", " ", text).strip()
+    text = clean_text_for_myanmar_font(text)
     if not text:
         return []
     if len(text) <= max_chars:
@@ -294,7 +357,8 @@ def translate_segments_with_fallback(
         payload = [{"id": idx, "text": s["text"]} for idx, s in enumerate(batch)]
         prompt = (
             f"Translate each 'text' field into natural, concise spoken {target_lang} for video dubbing. "
-            f"Return ONLY a JSON list of objects with 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"
+            f"Do not use emojis or special symbols. Return ONLY a JSON list of objects with 'id' and 'translation':\n"
+            f"{json.dumps(payload, ensure_ascii=False)}"
         )
 
         translated_success = False
@@ -311,7 +375,7 @@ def translate_segments_with_fallback(
                         parsed = parsed["translations"]
                     t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if "id" in item}
                     for idx, s in enumerate(batch):
-                        s["translated"] = t_map.get(idx, s["text"])
+                        s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
                     translated_success = True
                     break
                 except Exception as e:
@@ -333,7 +397,7 @@ def translate_segments_with_fallback(
                     messages=[
                         {
                             "role": "system",
-                            "content": f"You are a professional video dubbing translator. Translate accurately into natural spoken {target_lang}. Output valid JSON only."
+                            "content": f"You are a professional video dubbing translator. Translate accurately into natural spoken {target_lang} without emojis. Output valid JSON only."
                         },
                         {
                             "role": "user",
@@ -346,7 +410,7 @@ def translate_segments_with_fallback(
                 g_list = g_data.get("items", g_data) if isinstance(g_data, dict) else g_data
                 t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in g_list if isinstance(item, dict) and "id" in item}
                 for idx, s in enumerate(batch):
-                    s["translated"] = t_map.get(idx, s["text"])
+                    s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
             except Exception as final_err:
                 raise RuntimeError(f"ဘာသာပြန်ရာတွင် အခက်အခဲဖြစ်ပွားပါသည်: {final_err}")
 
@@ -376,6 +440,44 @@ async def synthesize_all_tts(segments, voice_id, rate_str, pitch_str):
 
     return await asyncio.gather(*[_one(i, s["translated"]) for i, s in enumerate(segments)])
 
+def mix_tts_with_bgm(
+    combined_tts_wav: str,
+    vol_boost_db: int,
+    enable_bgm: bool,
+    bgm_file_path: str,
+    bgm_vol_pct: int
+) -> str:
+    """TTS အသံနှင့် နောက်ခံသီချင်း (BGM) တို့ကို အချိုးကျ ရောစပ်ပေးခြင်း"""
+    final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+    tts_filter = f"loudnorm=I=-14:TP=-1.0:LRA=11,volume={int(vol_boost_db)}dB"
+
+    if enable_bgm and bgm_file_path and os.path.exists(bgm_file_path):
+        bgm_ratio = max(0.01, min(1.0, bgm_vol_pct / 100.0))
+        # -stream_loop -1 ဖြင့် သီချင်းတိုနေပါက Video အဆုံးအထိ အလိုအလျောက် ပြန်ပတ်တီးပေးမည်
+        filter_complex = (
+            f"[0:a]{tts_filter}[tts_loud];"
+            f"[1:a]volume={bgm_ratio:.3f}[bgm_low];"
+            f"[tts_loud][bgm_low]amix=inputs=2:duration=first:dropout_transition=2:normalize=0[a_out]"
+        )
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", combined_tts_wav,
+            "-stream_loop", "-1", "-i", bgm_file_path,
+            "-filter_complex", filter_complex,
+            "-map", "[a_out]",
+            "-ar", "44100", "-b:a", "192k", final_audio
+        ]
+        res = subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if res.returncode == 0 and os.path.exists(final_audio) and os.path.getsize(final_audio) > 0:
+            return final_audio
+
+    # BGM မထည့်ထားပါက TTS အသံသီးသန့် ထုတ်ပေးမည်
+    subprocess.run([
+        "ffmpeg", "-y", "-i", combined_tts_wav,
+        "-af", tts_filter, "-ar", "44100", "-b:a", "192k", final_audio
+    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    return final_audio
+
 def render_smooth_final_video(
     video_path: str,
     audio_path: str,
@@ -393,7 +495,6 @@ def render_smooth_final_video(
     web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
-    # boxblur အစား ဘောင်အရွယ်အစားမရွေး ၁၀၀% အလုပ်လုပ်သော gblur (Gaussian Blur) သုံးထားသည်
     sigma_val = max(2.0, float(blur_power))
 
     if enable_blur and bx_w >= 8 and bx_h >= 8:
@@ -538,8 +639,8 @@ def render_smooth_final_video(
     return web_ready_video
 
 # Streamlit UI တည်ဆောက်ခြင်း
-st.title("🎬 Pro Video Sync + 🌫️ Live Blur Preview + 🇲🇲 Myanmar Font Studio")
-st.caption("24/7 Active Streamlit Cloud Studio (Gaussian Blur + FastStart Player + Auto 503-Fallback)")
+st.title("🎬 Pro Video Sync + 🎵 BGM + 🎨 Color Subtitle Studio")
+st.caption("24/7 Active Studio (Background Music + Custom Subtitle Colors + Anti-Tofu Font Cleaner)")
 
 col1, col2 = st.columns([1, 1])
 
@@ -551,7 +652,19 @@ with col1:
         with open(video_temp_path, "wb") as f:
             f.write(uploaded_video.getbuffer())
 
-    st.subheader("📺 ၂။ Resolution နှင့် မြန်မာ Font ရွေးချယ်ရန်")
+    st.subheader("🎵 ၂။ နောက်ခံသီချင်း (Background Song) ဆက်တင်")
+    enable_bgm = st.checkbox("နောက်ခံသီချင်း (Background Music) ထည့်မည်", value=False)
+    bgm_temp_path = None
+    bgm_vol_pct = 15
+    if enable_bgm:
+        uploaded_bgm = st.file_uploader("🎶 နောက်ခံသီချင်းဖိုင် (MP3 / WAV / M4A) တင်ရန်", type=["mp3", "wav", "m4a", "ogg"])
+        bgm_vol_pct = st.slider("🔉 နောက်ခံသီချင်း အသံအတိုးအကျယ် (%)", 2, 60, 15, 1)
+        if uploaded_bgm:
+            bgm_temp_path = os.path.join(tempfile.gettempdir(), "input_bgm_audio.mp3")
+            with open(bgm_temp_path, "wb") as f:
+                f.write(uploaded_bgm.getbuffer())
+
+    st.subheader("🎨 ၃။ Resolution၊ မြန်မာ Font နှင့် စာသားအရောင် (Color)")
     res_choice = st.selectbox("ထုတ်ယူမည့် Video Resolution", RESOLUTION_CHOICES)
     font_choice = st.selectbox("မြန်မာ Font ရွေးချယ်ရန်", FONT_CHOICES)
     uploaded_font = st.file_uploader("📁 AJ 02 Regular (.ttf) သို့မဟုတ် စိတ်ကြိုက် Font တင်ရန်", type=["ttf", "otf"])
@@ -559,12 +672,16 @@ with col1:
     custom_font_path = register_uploaded_font(uploaded_font)
     active_font_path = find_font_path(font_choice, custom_font_path)
 
+    col_c1, col_c2 = st.columns(2)
+    sub_text_color = col_c1.color_picker("🎨 Subtitle စာသားအရောင် ရွေးရန်", "#FFE600")
+    sub_outline_color = col_c2.color_picker("🖌️ စာလုံး အနားသတ်လိုင်း (Outline) အရောင်", "#000000")
+
     c_a, c_b, c_c = st.columns(3)
     max_chars = c_a.slider("တစ်ကြောင်း စာလုံးရေ", 10, 35, 20, 2)
     font_size = c_b.slider("Font Size", 12, 30, 18, 1)
     outline_w = c_c.slider("Outline အထူ", 1.0, 5.0, 2.0, 0.5)
 
-    st.subheader("🌫️ ၃။ မူရင်း Subtitle ကို Blur ဖုံးရန်နှင့် နေရာရွှေ့ရန် (Live Preview)")
+    st.subheader("🌫️ ၄။ မူရင်း Subtitle ကို Blur ဖုံးရန်နှင့် နေရာရွှေ့ရန် (Live Preview)")
     enable_blur = st.checkbox("မူရင်း Subtitle ကို Blur ဖုံးအုပ်မည်", value=True)
     b1, b2 = st.columns(2)
     blur_y_pct = b1.slider("အပေါ်/အောက် နေရာ (Y %)", 5, 95, 82, 1)
@@ -581,11 +698,12 @@ with col1:
         if frame_bytes:
             preview_img, _ = generate_blur_preview_image(
                 frame_bytes, enable_blur, blur_x_pct, blur_y_pct, blur_w_pct, blur_h_pct,
-                blur_power, active_font_path, font_size, outline_w
+                blur_power, active_font_path, font_size, outline_w,
+                sub_text_color, sub_outline_color
             )
-            st.image(preview_img, caption="👁️ Blur ဘောင်နှင့် မြန်မာစာတန်းထိုး ပေါ်မည့်နေရာ နမူနာပုံ", use_container_width=True)
+            st.image(preview_img, caption="👁️ Blur ဘောင်နှင့် မြန်မာစာတန်းထိုး အရောင်နမူနာပုံ", use_container_width=True)
 
-    st.subheader("🔑 ၄။ API Keys နှင့် အသံချိန်ညှိမှု")
+    st.subheader("🔑 ၅။ API Keys နှင့် အသံချိန်ညှိမှု")
     default_groq = st.secrets.get("GROQ_API_KEY", "") if "GROQ_API_KEY" in st.secrets else ""
     default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
     groq_key = st.text_input("Groq API Key", value=default_groq, type="password")
@@ -600,7 +718,7 @@ with col1:
     s_a, s_b, s_c = st.columns(3)
     speed_pct = s_a.slider("TTS Speed (%)", -100, 100, 0, 5)
     pitch_hz = s_b.slider("TTS Pitch (Hz)", -50, 50, 0, 2)
-    vol_boost = s_c.slider("Volume Boost (dB)", 0, 15, 6, 1)
+    vol_boost = s_c.slider("TTS Volume Boost (dB)", 0, 15, 6, 1)
 
     start_btn = st.button("🚀 စတင်ပေါင်းစပ်မည် (Generate Smooth HD Video)", type="primary", use_container_width=True)
 
@@ -610,6 +728,8 @@ with col2:
             st.error("ကျေးဇူးပြု၍ Video ဖိုင် အရင် Upload တင်ပေးပါ။")
         elif not groq_key or not gemini_key:
             st.error("Groq API Key နှင့် Gemini API Key နှစ်ခုလုံး ထည့်ပေးပါ။")
+        elif enable_bgm and not bgm_temp_path:
+            st.error("နောက်ခံသီချင်း ထည့်မည်ဟု ရွေးထားသဖြင့် သီချင်းဖိုင် (MP3/WAV) အရင်တင်ပေးပါ (သို့မဟုတ် အမှန်ခြစ်ဖြုတ်ပါ)။")
         else:
             status = st.status("⏳ Video စတင်ပြုလုပ်နေပါသည်...", expanded=True)
             try:
@@ -628,7 +748,7 @@ with col2:
                 raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
                 segments = merge_close_whisper_segments(raw_segs)
 
-                status.write(f"၂/၅ - စာကြောင်း ({len(segments)}) ကြောင်းကို AI ဖြင့် ဘာသာပြန်နေပါသည်...")
+                status.write(f"၂/၅ - စာကြောင်း ({len(segments)}) ကြောင်းကို AI ဖြင့် ဘာသာပြန်ပြီး လေးထောင့်ကွက်များ သန့်စင်နေပါသည်...")
                 gemini_client = genai.Client(api_key=gemini_key.strip())
                 translate_segments_with_fallback(
                     gemini_client=gemini_client,
@@ -646,7 +766,7 @@ with col2:
                     segments[idx]["wav"] = wav_p
                     segments[idx]["tts_dur"] = tdur
 
-                status.write("၄/၅ - မြန်မာစာတန်းထိုးများနှင့် အသံလမ်းကြောင်း တည်ဆောက်နေပါသည်...")
+                status.write("၄/၅ - ရောင်စုံ မြန်မာစာတန်းထိုးများနှင့် နောက်ခံသီချင်း (BGM) တည်ဆောက်နေပါသည်...")
                 timeline, cursor = [], 0.0
                 for seg in segments:
                     s_start = max(cursor, seg["start"])
@@ -681,16 +801,25 @@ with col2:
                                 et_time = st_time + c_dur
                                 srt_blocks.append(f"{srt_counter}\n{format_srt_time(st_time)} --> {format_srt_time(et_time)}\n{c_str}\n")
                                 srt_counter += 1
-                                sub_rgba = render_myanmar_subtitle_rgba(c_str, active_font_path, int(font_size), int(round(outline_w)), vid_w)
+                                sub_rgba = render_myanmar_subtitle_rgba(
+                                    c_str, active_font_path, int(font_size), int(round(outline_w)), vid_w,
+                                    sub_text_color, sub_outline_color
+                                )
                                 sub_overlays.append({"img": sub_rgba, "start": st_time, "end": et_time})
                                 loc_c += c_dur
                         new_time_cursor += dur
 
                 srt_content = "\n".join(srt_blocks)
                 combined_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
                 subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", audio_list_file, "-c", "copy", combined_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run(["ffmpeg", "-y", "-i", combined_wav, "-af", f"loudnorm=I=-14:TP=-1.0:LRA=11,volume={int(vol_boost)}dB", "-ar", "44100", "-b:a", "192k", final_audio], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                final_audio = mix_tts_with_bgm(
+                    combined_tts_wav=combined_wav,
+                    vol_boost_db=int(vol_boost),
+                    enable_bgm=enable_bgm,
+                    bgm_file_path=bgm_temp_path,
+                    bgm_vol_pct=int(bgm_vol_pct)
+                )
 
                 status.write(f"၅/၅ - လုံးဝမထစ်စေရန် Direct Frame-Pipe ({vid_w}x{vid_h}) ဖြင့် Video ပေါင်းစပ်နေပါသည်...")
                 p_bar = st.progress(0.0)
@@ -741,4 +870,4 @@ with col2:
             file_name="myanmar_subtitle.srt",
             mime="text/plain",
             use_container_width=True
-                        )
+        )
