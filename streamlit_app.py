@@ -19,58 +19,56 @@ st.set_page_config(
     page_title="AI Video Dubbing Studio",
     page_icon="🎬",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# သပ်ရပ်လှပပြီး ပေါ့ပါးသော Modern Studio UI CSS
+# သပ်ရပ်လှပပြီး ဖုန်းမျက်နှာပြင်နှင့် ကွက်တိဖြစ်မည့် Compact Studio CSS
 st.markdown("""
 <style>
     .block-container {
-        padding-top: 1.5rem;
+        padding-top: 1rem;
         padding-bottom: 2rem;
-        max-width: 1200px;
+        max-width: 950px;
     }
     .studio-header {
         background: linear-gradient(135deg, #1e1b4b 0%, #311042 100%);
-        padding: 1.4rem 1.8rem;
-        border-radius: 16px;
+        padding: 1rem 1.2rem;
+        border-radius: 14px;
         border: 1px solid rgba(255,255,255,0.12);
-        margin-bottom: 1.5rem;
-        box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+        margin-bottom: 1rem;
+        text-align: center;
     }
     .studio-header h1 {
         margin: 0;
-        font-size: 1.65rem;
+        font-size: 1.3rem;
         font-weight: 700;
         color: #ffffff;
     }
     .studio-header p {
-        margin: 0.35rem 0 0 0;
-        font-size: 0.92rem;
+        margin: 0.25rem 0 0 0;
+        font-size: 0.82rem;
         color: #cbd5e1;
     }
     div.stButton > button[kind="primary"] {
         background: linear-gradient(90deg, #6366f1 0%, #ec4899 100%);
         color: white;
         border: none;
-        padding: 0.75rem 1.4rem;
+        padding: 0.7rem 1.2rem;
         font-weight: 600;
         border-radius: 12px;
-        transition: all 0.2s ease;
         box-shadow: 0 4px 14px rgba(236, 72, 153, 0.35);
     }
-    div.stButton > button[kind="primary"]:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 6px 20px rgba(236, 72, 153, 0.5);
-    }
-    div[data-testid="stExpander"] {
-        border-radius: 12px;
-        border: 1px solid rgba(148, 163, 184, 0.2);
+    /* Cropper ပုံကို ဖုန်းအလယ်တွင် သပ်ရပ်စွာ ချုံ့ထားရန် */
+    iframe[title="streamlit_cropper.st_cropper"] {
+        display: block;
+        margin: 0 auto;
+        border-radius: 10px;
+        border: 1px solid rgba(255,255,255,0.2);
     }
 </style>
 <div class="studio-header">
     <h1>✨ Myanmar Video Dubbing Studio</h1>
-    <p>Gemini 3.5 Translation • Touch Drag Blur Box • Frame-Sync HD Engine</p>
+    <p>Gemini 3.5 • Compact Touch Blur • Smooth HD Output</p>
 </div>
 """, unsafe_allow_html=True)
 
@@ -105,7 +103,6 @@ def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
     return (255, 255, 255, alpha)
 
 def clean_text_for_myanmar_font(text: str) -> str:
-    """လေးထောင့်ကွက် (Tofu □) လုံးဝမပေါ်စေရန် စာလုံးပိုများ သန့်စင်ခြင်း"""
     if not text:
         return ""
     text = re.sub(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u202a-\u202e\u2060-\u206f]", "", text)
@@ -524,7 +521,7 @@ def render_smooth_final_video(
     progress_bar.progress(1.0)
     return web_ready_video
 
-# ==================== SIDEBAR SETTINGS (ပေါ့ပါးသပ်ရပ်သော ဘေးဘက် Menu) ====================
+# ==================== SIDEBAR SETTINGS (ဘယ်ဘက်အပေါ် >> နှိပ်၍ ဖွင့်ရန်) ====================
 with st.sidebar:
     st.markdown("### ⚙️ Studio Settings")
 
@@ -562,56 +559,61 @@ with st.sidebar:
         outline_w = st.slider("Outline အထူ", 1.0, 5.0, 2.0, 0.5)
 
 # ==================== MAIN WORKSPACE ====================
-col_left, col_right = st.columns([1.05, 0.95], gap="large")
+uploaded_video = st.file_uploader("📁 Video ဖိုင်ရွေးပါ (MP4, MOV, MKV)", type=["mp4", "mov", "mkv", "webm"])
 
-with col_left:
-    st.markdown("#### 📁 ၁။ Video တင်ရန် နှင့် Blur နေရာ လက်ဖြင့်ရွှေ့ရန်")
-    uploaded_video = st.file_uploader("Video ဖိုင်ရွေးပါ (MP4, MOV, MKV)", type=["mp4", "mov", "mkv", "webm"], label_visibility="collapsed")
+video_temp_path = None
+drag_box_coords = (0, 0, 100, 50)
+orig_w, orig_h, vid_fps, vid_dur = 1280, 720, 30.0, 0.0
 
-    video_temp_path = None
-    drag_box_coords = (0, 0, 100, 50)
-    orig_w, orig_h, vid_fps, vid_dur = 1280, 720, 30.0, 0.0
+if uploaded_video:
+    video_temp_path = os.path.join(tempfile.gettempdir(), "input_source_video.mp4")
+    with open(video_temp_path, "wb") as f:
+        f.write(uploaded_video.getbuffer())
+    orig_w, orig_h, vid_fps, vid_dur = get_video_info(video_temp_path)
 
-    if uploaded_video:
-        video_temp_path = os.path.join(tempfile.gettempdir(), "input_source_video.mp4")
-        with open(video_temp_path, "wb") as f:
-            f.write(uploaded_video.getbuffer())
-        orig_w, orig_h, vid_fps, vid_dur = get_video_info(video_temp_path)
-
-        c_t1, c_t2 = st.columns([1, 1])
+    with st.container(border=True):
+        c_t1, c_t2 = st.columns([1.2, 1])
         enable_blur = c_t1.toggle("🌫️ မူရင်းစာတန်းကို Blur ဖုံးမည်", value=True)
-        blur_power = c_t2.slider("Blur အပြင်းအပျော့", 10, 50, 25, 5, label_visibility="collapsed")
+        preview_sec = c_t2.slider("Preview စက္ကန့်", 0.5, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
 
-        preview_sec = st.slider("စာတန်းပါသော စက္ကန့်ကို ရွှေ့ရန်", 0.5, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
+        # ဖုန်းပေါ်တွင် အပေါ်အောက် အလွယ်တကူ ရွှေ့နိုင်ရန် Quick Position Slider နှင့် Touch Box နှစ်မျိုးလုံး ပေးထားသည်
+        s_col1, s_col2, s_col3 = st.columns(3)
+        y_pos_pct = s_col1.slider("အပေါ်/အောက် နေရာ (%)", 10, 92, 76, 1)
+        box_h_pct = s_col2.slider("ဘောင်အမြင့် (%)", 5, 30, 12, 1)
+        blur_power = s_col3.slider("Blur အပြင်းအပျော့", 10, 45, 22, 2)
+
         frame_bytes = extract_frame_bytes(video_temp_path, preview_sec, os.path.getsize(video_temp_path))
-
         if frame_bytes:
             raw_pil = Image.open(BytesIO(frame_bytes)).convert("RGB")
-            disp_w = 460
+            # ဖုန်းမျက်နှာပြင်တွင် ချောင်ချောင်ချိချိ ရွှေ့နိုင်ရန် ပုံကို 240px သို့ သေးသေးလေး ချုံ့ထားသည်
+            disp_w = 240 if orig_w <= orig_h else 320
             disp_h = int(round(orig_h * (disp_w / float(orig_w))))
             resized_pil = raw_pil.resize((disp_w, disp_h), Image.LANCZOS)
 
-            st.caption("👆 **အောက်ပါ Video ပုံပေါ်ရှိ အစိမ်းရောင်ဘောင်ကို လက်ဖြင့် ဖိဆွဲ၍ နေရာရွှေ့ပါ (ထောင့်စွန်းများမှ အကြီး/အသေး ချဲ့နိုင်သည်) -**")
+            st.caption("👇 **ပုံကို သေးသေးလေး ချုံ့ပေးထားပါသည် (ဘောင်ကို လက်ဖြင့်ဆွဲရွှေ့နိုင်သလို အပေါ်က Slider ဖြင့်လည်း အပေါ်/အောက် ရွှေ့နိုင်သည်)**")
 
-            # Default ဘောင်အနေအထားကို အောက်ခြေ Subtitle နေရာတွင် ထားပေးခြင်း
+            top_px = int(disp_h * (y_pos_pct / 100.0))
+            bot_px = min(disp_h - 4, top_px + max(14, int(disp_h * (box_h_pct / 100.0))))
             def_coords = (
                 int(disp_w * 0.08),
                 int(disp_w * 0.92),
-                int(disp_h * 0.78),
-                int(disp_h * 0.90)
+                top_px,
+                bot_px
             )
 
-            box_dict = st_cropper(
-                resized_pil,
-                realtime_update=True,
-                box_color="#00FF66",
-                aspect_ratio=None,
-                default_coords=def_coords,
-                return_type="box",
-                key="interactive_blur_box"
-            )
+            # ဘေးနှစ်ဖက်တွင် နေရာလွတ်ချန်ထားသဖြင့် ဖုန်းပေါ်တွင် အပေါ်/အောက် Scroll ဆွဲရန် လုံးဝမညပ်တော့ပါ
+            pad_l, center_col, pad_r = st.columns([1, 2, 1])
+            with center_col:
+                box_dict = st_cropper(
+                    resized_pil,
+                    realtime_update=True,
+                    box_color="#00FF66",
+                    aspect_ratio=None,
+                    default_coords=def_coords,
+                    return_type="box",
+                    key=f"compact_cropper_{y_pos_pct}_{box_h_pct}"
+                )
 
-            # လက်ဖြင့် ရွှေ့လိုက်သော ဘောင်ကို မူရင်း Video Resolution သို့ အချိုးကျ ပြန်တွက်ခြင်း
             sx = orig_w / float(disp_w)
             sy = orig_h / float(disp_h)
             bx_x = max(0, int(box_dict["left"] * sx))
@@ -619,158 +621,156 @@ with col_left:
             bx_w = max(16, int(box_dict["width"] * sx))
             bx_h = max(16, int(box_dict["height"] * sy))
             drag_box_coords = (bx_x, bx_y, bx_w, bx_h)
+else:
+    enable_blur = True
+    blur_power = 22
+
+start_btn = st.button("🚀 စတင်ပေါင်းစပ်မည် (Generate Smooth HD Video)", type="primary", use_container_width=True)
+
+if start_btn:
+    if not video_temp_path:
+        st.error("ကျေးဇူးပြု၍ Video ဖိုင် အရင် Upload တင်ပေးပါ။")
+    elif not groq_key or not gemini_key:
+        st.error("ဘယ်ဘက်အပေါ်ထောင့်ရှိ `>>` (Sidebar) ကိုနှိပ်ပြီး Groq နှင့် Gemini API Key များ ထည့်ပေးပါ။")
     else:
-        enable_blur = True
-        blur_power = 25
-        st.info("👆 စတင်ရန် Video ဖိုင် တစ်ခု အရင် Upload တင်ပေးပါ။")
+        status = st.status("⏳ AI Video Dubbing စတင်နေပါသည်...", expanded=True)
+        try:
+            vid_w, vid_h = calculate_target_resolution(orig_w, orig_h, res_choice)
 
-with col_right:
-    st.markdown("#### 🎬 ၂။ Final Preview & Output")
-    start_btn = st.button("🚀 စတင်ပေါင်းစပ်မည် (Generate HD Video)", type="primary", use_container_width=True)
-
-    if start_btn:
-        if not video_temp_path:
-            st.error("ကျေးဇူးပြု၍ Video ဖိုင် အရင် Upload တင်ပေးပါ။")
-        elif not groq_key or not gemini_key:
-            st.error("ဘယ်ဘက် Menu (Sidebar) တွင် Groq နှင့် Gemini API Key များ ထည့်ပေးပါ။")
-        else:
-            status = st.status("⏳ AI Video Dubbing စတင်နေပါသည်...", expanded=True)
-            try:
-                vid_w, vid_h = calculate_target_resolution(orig_w, orig_h, res_choice)
-
-                status.write("🎧 ၁/၄ - Groq Whisper ဖြင့် အသံနားထောင်နေပါသည်...")
-                extracted_audio = extract_compressed_audio(video_temp_path)
-                groq_client = Groq(api_key=groq_key.strip())
-                with open(extracted_audio, "rb") as f:
-                    trans = groq_client.audio.transcriptions.create(
-                        file=(extracted_audio, f.read()),
-                        model="whisper-large-v3-turbo",
-                        response_format="verbose_json"
-                    )
-                raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
-                segments = merge_close_whisper_segments(raw_segs)
-
-                status.write(f"🤖 ၂/၄ - `{gemini_model}` ဖြင့် စာကြောင်း ({len(segments)}) ကြောင်း ဘာသာပြန်နေပါသည်...")
-                gemini_client = genai.Client(api_key=gemini_key.strip())
-                translate_segments_with_fallback(
-                    gemini_client=gemini_client,
-                    groq_client=groq_client,
-                    preferred_model=gemini_model,
-                    segments=segments,
-                    target_lang=target_lang,
-                    status_box=status
+            status.write("🎧 ၁/၄ - Groq Whisper ဖြင့် အသံနားထောင်နေပါသည်...")
+            extracted_audio = extract_compressed_audio(video_temp_path)
+            groq_client = Groq(api_key=groq_key.strip())
+            with open(extracted_audio, "rb") as f:
+                trans = groq_client.audio.transcriptions.create(
+                    file=(extracted_audio, f.read()),
+                    model="whisper-large-v3-turbo",
+                    response_format="verbose_json"
                 )
+            raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
+            segments = merge_close_whisper_segments(raw_segs)
 
-                status.write("🗣️ ၃/၄ - Edge-TTS အသံနှင့် မြန်မာစာတန်းထိုးများ တည်ဆောက်နေပါသည်...")
-                safe_speed = max(-99, min(100, int(speed_pct)))
-                tts_res = asyncio.run(synthesize_all_tts(segments, VOICES[voice_label], f"{safe_speed:+d}%", f"{int(pitch_hz):+d}Hz"))
-                for idx, wav_p, tdur in tts_res:
-                    segments[idx]["wav"] = wav_p
-                    segments[idx]["tts_dur"] = tdur
+            status.write(f"🤖 ၂/၄ - `{gemini_model}` ဖြင့် စာကြောင်း ({len(segments)}) ကြောင်း ဘာသာပြန်နေပါသည်...")
+            gemini_client = genai.Client(api_key=gemini_key.strip())
+            translate_segments_with_fallback(
+                gemini_client=gemini_client,
+                groq_client=groq_client,
+                preferred_model=gemini_model,
+                segments=segments,
+                target_lang=target_lang,
+                status_box=status
+            )
 
-                timeline, cursor = [], 0.0
-                for seg in segments:
-                    s_start = max(cursor, seg["start"])
-                    s_end = max(s_start + 0.1, seg["end"])
-                    if s_start - cursor > 0.08:
-                        timeline.append({"type": "gap", "v_start": cursor, "v_end": s_start, "target_dur": s_start - cursor})
-                    timeline.append({
-                        "type": "speech", "v_start": s_start, "v_end": s_end,
-                        "target_dur": max(0.25, seg["tts_dur"]), "wav": seg["wav"], "text": seg["translated"]
-                    })
-                    cursor = s_end
-                if vid_dur - cursor > 0.08:
-                    timeline.append({"type": "gap", "v_start": cursor, "v_end": vid_dur, "target_dur": vid_dur - cursor})
+            status.write("🗣️ ၃/၄ - Edge-TTS အသံနှင့် မြန်မာစာတန်းထိုးများ တည်ဆောက်နေပါသည်...")
+            safe_speed = max(-99, min(100, int(speed_pct)))
+            tts_res = asyncio.run(synthesize_all_tts(segments, VOICES[voice_label], f"{safe_speed:+d}%", f"{int(pitch_hz):+d}Hz"))
+            for idx, wav_p, tdur in tts_res:
+                segments[idx]["wav"] = wav_p
+                segments[idx]["tts_dur"] = tdur
 
-                srt_blocks, sub_overlays, srt_counter, new_time_cursor = [], [], 1, 0.0
-                audio_list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt").name
-                with open(audio_list_file, "w", encoding="utf-8") as af:
-                    for item in timeline:
-                        dur = item["target_dur"]
-                        if item["type"] == "gap":
-                            sil = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                            subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{dur:.3f}", sil], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                            af.write(f"file '{sil}'\n")
-                        else:
-                            af.write(f"file '{item['wav']}'\n")
-                            short_lines = split_into_short_lines(item["text"], int(max_chars))
-                            tot_c = sum(len(c) for c in short_lines) or 1
-                            loc_c = 0.0
-                            for c_idx, c_str in enumerate(short_lines):
-                                c_dur = dur * (len(c_str) / tot_c) if c_idx < len(short_lines) - 1 else (dur - loc_c)
-                                st_time = new_time_cursor + loc_c
-                                et_time = st_time + c_dur
-                                srt_blocks.append(f"{srt_counter}\n{format_srt_time(st_time)} --> {format_srt_time(et_time)}\n{c_str}\n")
-                                srt_counter += 1
-                                sub_rgba = render_myanmar_subtitle_rgba(
-                                    c_str, active_font_path, int(font_size), int(round(outline_w)), vid_w,
-                                    sub_text_color, sub_outline_color
-                                )
-                                sub_overlays.append({"img": sub_rgba, "start": st_time, "end": et_time})
-                                loc_c += c_dur
-                        new_time_cursor += dur
+            timeline, cursor = [], 0.0
+            for seg in segments:
+                s_start = max(cursor, seg["start"])
+                s_end = max(s_start + 0.1, seg["end"])
+                if s_start - cursor > 0.08:
+                    timeline.append({"type": "gap", "v_start": cursor, "v_end": s_start, "target_dur": s_start - cursor})
+                timeline.append({
+                    "type": "speech", "v_start": s_start, "v_end": s_end,
+                    "target_dur": max(0.25, seg["tts_dur"]), "wav": seg["wav"], "text": seg["translated"]
+                })
+                cursor = s_end
+            if vid_dur - cursor > 0.08:
+                timeline.append({"type": "gap", "v_start": cursor, "v_end": vid_dur, "target_dur": vid_dur - cursor})
 
-                srt_content = "\n".join(srt_blocks)
-                combined_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-                subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", audio_list_file, "-c", "copy", combined_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                subprocess.run([
-                    "ffmpeg", "-y", "-i", combined_wav,
-                    "-af", f"loudnorm=I=-14:TP=-1.0:LRA=11,volume={int(vol_boost)}dB",
-                    "-ar", "44100", "-b:a", "192k", final_audio
-                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+            srt_blocks, sub_overlays, srt_counter, new_time_cursor = [], [], 1, 0.0
+            audio_list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt").name
+            with open(audio_list_file, "w", encoding="utf-8") as af:
+                for item in timeline:
+                    dur = item["target_dur"]
+                    if item["type"] == "gap":
+                        sil = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{dur:.3f}", sil], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                        af.write(f"file '{sil}'\n")
+                    else:
+                        af.write(f"file '{item['wav']}'\n")
+                        short_lines = split_into_short_lines(item["text"], int(max_chars))
+                        tot_c = sum(len(c) for c in short_lines) or 1
+                        loc_c = 0.0
+                        for c_idx, c_str in enumerate(short_lines):
+                            c_dur = dur * (len(c_str) / tot_c) if c_idx < len(short_lines) - 1 else (dur - loc_c)
+                            st_time = new_time_cursor + loc_c
+                            et_time = st_time + c_dur
+                            srt_blocks.append(f"{srt_counter}\n{format_srt_time(st_time)} --> {format_srt_time(et_time)}\n{c_str}\n")
+                            srt_counter += 1
+                            sub_rgba = render_myanmar_subtitle_rgba(
+                                c_str, active_font_path, int(font_size), int(round(outline_w)), vid_w,
+                                sub_text_color, sub_outline_color
+                            )
+                            sub_overlays.append({"img": sub_rgba, "start": st_time, "end": et_time})
+                            loc_c += c_dur
+                    new_time_cursor += dur
 
-                status.write(f"🎞️ ၄/၄ - Video ({vid_w}x{vid_h}) နှင့် စာတန်းထိုးများ ပေါင်းစပ်နေပါသည်...")
-                p_bar = st.progress(0.0)
+            srt_content = "\n".join(srt_blocks)
+            combined_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+            final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+            subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", audio_list_file, "-c", "copy", combined_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.run([
+                "ffmpeg", "-y", "-i", combined_wav,
+                "-af", f"loudnorm=I=-14:TP=-1.0:LRA=11,volume={int(vol_boost)}dB",
+                "-ar", "44100", "-b:a", "192k", final_audio
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-                scale_rx = vid_w / float(orig_w)
-                scale_ry = vid_h / float(orig_h)
-                norm_box = (
-                    min(max(0, int(drag_box_coords[0] * scale_rx)), vid_w - 16),
-                    min(max(0, int(drag_box_coords[1] * scale_ry)), vid_h - 16),
-                    max(16, min(vid_w, int(drag_box_coords[2] * scale_rx))),
-                    max(16, min(vid_h, int(drag_box_coords[3] * scale_ry)))
-                )
+            status.write(f"🎞️ ၄/၄ - Video ({vid_w}x{vid_h}) နှင့် စာတန်းထိုးများ ပေါင်းစပ်နေပါသည်...")
+            p_bar = st.progress(0.0)
 
-                out_video_path = render_smooth_final_video(
-                    video_path=video_temp_path,
-                    audio_path=final_audio,
-                    timeline=timeline,
-                    sub_overlays=sub_overlays,
-                    vid_w=vid_w,
-                    vid_h=vid_h,
-                    vid_fps=vid_fps,
-                    enable_blur=enable_blur,
-                    blur_box_norm=norm_box,
-                    blur_power=blur_power,
-                    progress_bar=p_bar
-                )
+            scale_rx = vid_w / float(orig_w)
+            scale_ry = vid_h / float(orig_h)
+            norm_box = (
+                min(max(0, int(drag_box_coords[0] * scale_rx)), vid_w - 16),
+                min(max(0, int(drag_box_coords[1] * scale_ry)), vid_h - 16),
+                max(16, min(vid_w, int(drag_box_coords[2] * scale_rx))),
+                max(16, min(vid_h, int(drag_box_coords[3] * scale_ry)))
+            )
 
-                with open(out_video_path, "rb") as vf:
-                    st.session_state["final_video_bytes"] = vf.read()
-                st.session_state["final_srt_content"] = srt_content
-                st.session_state["final_res_label"] = f"{vid_w}x{vid_h}"
+            out_video_path = render_smooth_final_video(
+                video_path=video_temp_path,
+                audio_path=final_audio,
+                timeline=timeline,
+                sub_overlays=sub_overlays,
+                vid_w=vid_w,
+                vid_h=vid_h,
+                vid_fps=vid_fps,
+                enable_blur=enable_blur,
+                blur_box_norm=norm_box,
+                blur_power=blur_power,
+                progress_bar=p_bar
+            )
 
-                status.update(label=f"✅ အောင်မြင်စွာ ပြီးဆုံးပါပြီ! ({vid_w}x{vid_h})", state="complete", expanded=False)
+            with open(out_video_path, "rb") as vf:
+                st.session_state["final_video_bytes"] = vf.read()
+            st.session_state["final_srt_content"] = srt_content
+            st.session_state["final_res_label"] = f"{vid_w}x{vid_h}"
 
-            except Exception as e:
-                status.update(label="❌ Error ဖြစ်ပွားပါသည်", state="error")
-                st.error(f"Error အသေးစိတ်: {e}")
+            status.update(label=f"✅ အောင်မြင်စွာ ပြီးဆုံးပါပြီ! ({vid_w}x{vid_h})", state="complete", expanded=False)
 
-    if "final_video_bytes" in st.session_state and st.session_state["final_video_bytes"]:
-        st.video(st.session_state["final_video_bytes"], format="video/mp4")
-        d1, d2 = st.columns(2)
-        d1.download_button(
-            "📥 Video Download ဆွဲရန်",
-            data=st.session_state["final_video_bytes"],
-            file_name="myanmar_dubbed_video.mp4",
-            mime="video/mp4",
-            use_container_width=True
-        )
-        d2.download_button(
-            "📥 SRT Download ဆွဲရန်",
-            data=st.session_state.get("final_srt_content", ""),
-            file_name="myanmar_subtitle.srt",
-            mime="text/plain",
-            use_container_width=True
+        except Exception as e:
+            status.update(label="❌ Error ဖြစ်ပွားပါသည်", state="error")
+            st.error(f"Error အသေးစိတ်: {e}")
+
+if "final_video_bytes" in st.session_state and st.session_state["final_video_bytes"]:
+    st.markdown(f"#### 🎬 Final Video ({st.session_state.get('final_res_label', '')})")
+    st.video(st.session_state["final_video_bytes"], format="video/mp4")
+    d1, d2 = st.columns(2)
+    d1.download_button(
+        "📥 Video Download ဆွဲရန်",
+        data=st.session_state["final_video_bytes"],
+        file_name="myanmar_dubbed_video.mp4",
+        mime="video/mp4",
+        use_container_width=True
     )
+    d2.download_button(
+        "📥 SRT Download ဆွဲရန်",
+        data=st.session_state.get("final_srt_content", ""),
+        file_name="myanmar_subtitle.srt",
+        mime="text/plain",
+        use_container_width=True
+)
