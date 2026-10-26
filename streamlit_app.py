@@ -9,66 +9,74 @@ from io import BytesIO
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import streamlit as st
+from streamlit_cropper import st_cropper
 from groq import Groq
 from google import genai
 from google.genai import types
 import edge_tts
 
 st.set_page_config(
-    page_title="RecapMM Studio",
-    page_icon="🍊",
+    page_title="RecapMM Studio (Light UI)",
+    page_icon="🎬",
     layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# ==================== RECAPMM DARK & ORANGE THEME CSS ====================
+# ==================== SOFT LIGHT PASTEL THEME CSS (စာသားများ ရှင်းလင်းစွာမြင်ရစေရန်) ====================
 st.markdown("""
 <style>
+    /* ပင်မ နောက်ခံအရောင်ဖျော့ဖျော့နှင့် စာလုံးအနက်ရောင် */
     .stApp {
-        background-color: #0d0d0d;
-        color: #f5f5f5;
+        background-color: #F1F5F9 !important;
+        color: #0F172A !important;
     }
     .block-container {
         padding-top: 0.8rem;
         padding-bottom: 3rem;
         max-width: 520px;
     }
+    /* စာသားအားလုံး အနက်ရောင်/မီးခိုးရင့်ရောင် ရှင်းလင်းစွာ ပေါ်စေရန် */
+    p, span, label, div[data-testid="stMarkdownContainer"] p {
+        color: #1E293B !important;
+    }
     .recap-topbar {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        padding: 0.65rem 1rem;
-        background: #141414;
-        border-bottom: 1px solid #2a2a2a;
-        border-radius: 12px;
-        margin-bottom: 0.8rem;
+        padding: 0.75rem 1.1rem;
+        background: #FFFFFF;
+        border: 1px solid #E2E8F0;
+        border-radius: 14px;
+        margin-bottom: 0.9rem;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.05);
     }
     .recap-logo {
         font-size: 1.35rem;
         font-weight: 800;
-        color: #f97316;
+        color: #EA580C;
         letter-spacing: -0.5px;
     }
     .recap-logo span {
-        color: #ffffff;
+        color: #0F172A;
     }
     .recap-badge {
-        background: #1f1f1f;
-        color: #d4d4d8;
-        padding: 0.25rem 0.65rem;
+        background: #FFF7ED;
+        color: #C2410C !important;
+        font-weight: 600;
+        padding: 0.25rem 0.7rem;
         border-radius: 8px;
-        font-size: 0.8rem;
-        border: 1px solid #333;
+        font-size: 0.82rem;
+        border: 1px solid #FFEDD5;
     }
     .step-header {
         display: flex;
         align-items: center;
         gap: 10px;
-        margin: 0.5rem 0 0.8rem 0;
+        margin: 0.3rem 0 0.7rem 0;
     }
     .step-circle {
-        background: #f97316;
-        color: #000000;
+        background: #EA580C;
+        color: #FFFFFF !important;
         font-weight: 800;
         width: 26px;
         height: 26px;
@@ -79,40 +87,60 @@ st.markdown("""
         font-size: 0.85rem;
     }
     .step-title {
-        font-size: 1.1rem;
+        font-size: 1.08rem;
         font-weight: 700;
-        color: #ffffff;
+        color: #0F172A !important;
     }
+    /* ကတ်ပြားများအားလုံး အဖြူရောင် သန့်သန့်လေးဖြစ်စေရန် */
     div[data-testid="stVerticalBlockBorderWrapper"] {
-        background-color: #151210 !important;
-        border: 1px solid #2e241d !important;
+        background-color: #FFFFFF !important;
+        border: 1px solid #CBD5E1 !important;
         border-radius: 16px !important;
-        padding: 0.85rem !important;
-        margin-bottom: 0.9rem !important;
+        padding: 0.95rem !important;
+        margin-bottom: 0.95rem !important;
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04) !important;
+    }
+    /* Input Box နှင့် Text Area များ အရောင်ဖျော့ပြီး စာလုံးထင်ရှားစေရန် */
+    input, textarea, div[data-baseweb="select"] > div {
+        background-color: #F8FAFC !important;
+        color: #0F172A !important;
+        border-color: #CBD5E1 !important;
     }
     div.stButton > button[kind="primary"] {
-        background: linear-gradient(90deg, #f97316 0%, #fb923c 100%) !important;
-        color: #0f0f0f !important;
+        background: linear-gradient(90deg, #EA580C 0%, #F97316 100%) !important;
+        color: #FFFFFF !important;
         font-weight: 700 !important;
         border: none !important;
         border-radius: 12px !important;
         padding: 0.65rem 1rem !important;
-        box-shadow: 0 4px 14px rgba(249, 115, 22, 0.3) !important;
+        box-shadow: 0 4px 12px rgba(234, 88, 12, 0.25) !important;
+    }
+    div.stButton > button[kind="primary"] p {
+        color: #FFFFFF !important;
     }
     div.stButton > button[kind="secondary"] {
-        background-color: #1f1b18 !important;
-        color: #f3f4f6 !important;
-        border: 1px solid #3d322c !important;
+        background-color: #F1F5F9 !important;
+        color: #0F172A !important;
+        border: 1px solid #CBD5E1 !important;
         border-radius: 10px !important;
         font-weight: 600 !important;
     }
     div.stDownloadButton > button {
-        background: linear-gradient(90deg, #f97316 0%, #fb923c 100%) !important;
-        color: #0f0f0f !important;
+        background: linear-gradient(90deg, #0284C7 0%, #0EA5E9 100%) !important;
+        color: #FFFFFF !important;
         font-weight: 800 !important;
         border: none !important;
         border-radius: 12px !important;
         padding: 0.75rem 1rem !important;
+    }
+    div.stDownloadButton > button p {
+        color: #FFFFFF !important;
+    }
+    iframe[title="streamlit_cropper.st_cropper"] {
+        display: block;
+        margin: 0 auto;
+        border-radius: 10px;
+        border: 2px solid #94A3B8;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -120,7 +148,6 @@ st.markdown("""
 USER_FONT_DIR = os.path.expanduser("~/.local/share/fonts")
 os.makedirs(USER_FONT_DIR, exist_ok=True)
 
-# ဗီဒီယိုထဲကအတိုင်း အသံ (၆) မျိုး (မိန်းကလေး ၃၊ ယောက်ျားလေး ၃)
 VOICE_PRESETS = {
     "မိန်းကလေး ၁ - တည်ငြိမ်": {"voice": "my-MM-NilarNeural", "rate": 0, "pitch": -2},
     "မိန်းကလေး ၂ - ပေါ့ပါး": {"voice": "my-MM-NilarNeural", "rate": 8, "pitch": 2},
@@ -278,9 +305,8 @@ def extract_frame_bytes(video_path: str, time_sec: float, file_size: int) -> byt
 
 def render_myanmar_subtitle_rgba(
     text: str, font_path: str, size_scale_pct: int, vid_w: int,
-    text_hex: str = "#38BDF8", pill_bg: bool = True
+    text_hex: str = "#38BDF8", pill_bg: bool = False
 ) -> Image.Image:
-    """RecapMM စတိုင် အမည်းရောင် Pill ဘောင်အကြည်လေးနှင့် မြန်မာစာတန်းထိုး ပုံဖော်ခြင်း"""
     clean_txt = clean_text_for_myanmar_font(text) or " "
     base_pt = 20 * (size_scale_pct / 100.0)
     scaled_px = max(14, int(base_pt * (vid_w / 540.0)))
@@ -298,8 +324,8 @@ def render_myanmar_subtitle_rgba(
     except Exception:
         tw, th, offset_x, offset_y = 300, 40, 0, 0
 
-    sp = max(2, int(round(2.2 * (vid_w / 720.0))))
-    pad_x = int(18 * (vid_w / 720.0))
+    sp = max(2, int(round(2.3 * (vid_w / 720.0))))
+    pad_x = int(16 * (vid_w / 720.0))
     pad_y = int(10 * (vid_w / 720.0))
     img_w = tw + (sp * 2) + (pad_x * 2)
     img_h = th + (sp * 2) + (pad_y * 2)
@@ -311,7 +337,7 @@ def render_myanmar_subtitle_rgba(
         draw.rounded_rectangle(
             [2, 2, img_w - 2, img_h - 2],
             radius=int(img_h * 0.35),
-            fill=(15, 15, 15, 165)
+            fill=(15, 15, 15, 150)
         )
 
     x_pos = pad_x + sp + offset_x
@@ -352,67 +378,58 @@ def render_watermark_rgba(wm_text: str, font_path: str, wm_opacity_pct: int, wm_
     draw.text((8 - bbox[0], 6 - bbox[1]), clean_wm, font=font, fill=(255, 255, 255, alpha_val))
     return canvas
 
-def generate_recapmm_preview(
+def build_touch_canvas_background(
     frame_bytes: bytes,
+    disp_w: int,
+    disp_h: int,
+    active_mode: str,
     enable_blur: bool,
-    blur_y_pct: int,
-    blur_h_pct: int,
-    blur_w_pct: int,
+    blur_box_disp: tuple,
     blur_opacity_pct: int,
     show_sub: bool,
-    sub_y_pct: int,
+    sub_center_disp: tuple,
     sample_text: str,
     font_path: str,
     sub_size_pct: int,
     sub_color_hex: str,
-    enable_wm: bool,
-    wm_text: str,
-    wm_x_pct: int,
-    wm_y_pct: int,
-    wm_opacity_pct: int,
-    wm_size_pct: int,
     mirror_vid: bool
-):
+) -> Image.Image:
+    """
+    Video ပေါ်တွင် Blur နှင့် မြန်မာစာတန်းထိုးကို လက်ဖြင့် တိုက်ရိုက် ဆွဲရွှေ့ချိန်ညှိနိုင်ရန်
+    နောက်ခံပုံကို တည်ဆောက်ပေးခြင်း
+    """
     img = Image.open(BytesIO(frame_bytes)).convert("RGBA")
     if mirror_vid:
         img = img.transpose(Image.FLIP_LEFT_RIGHT)
-    iw, ih = img.size
+    img = img.resize((disp_w, disp_h), Image.LANCZOS)
 
-    bx_w = max(16, int(iw * (blur_w_pct / 100.0)))
-    bx_h = max(16, int(ih * (blur_h_pct / 100.0)))
-    bx_x = (iw - bx_w) // 2
-    bx_y = min(max(0, int(ih * (blur_y_pct / 100.0))), ih - bx_h)
+    bx_x, bx_y, bx_w, bx_h = blur_box_disp
+    bx_x = min(max(0, bx_x), disp_w - 12)
+    bx_y = min(max(0, bx_y), disp_h - 12)
+    bx_w = min(max(12, bx_w), disp_w - bx_x)
+    bx_h = min(max(12, bx_h), disp_h - bx_y)
 
+    # Blur ဖုံးထားသော နေရာကို ပုံပေါ်တွင် တိုက်ရိုက် ပြသခြင်း
     if enable_blur and blur_opacity_pct > 0:
         crop = img.crop((bx_x, bx_y, bx_x + bx_w, bx_y + bx_h))
-        blurred = crop.filter(ImageFilter.GaussianBlur(radius=max(4, int(18 * (blur_opacity_pct / 100.0)))))
-        # Blur ပေါ်တွင် မူရင်းစာသား လုံးဝမမြင်ရစေရန် Dark Tint နှင့် ပေါင်းစပ်ခြင်း
-        dark_overlay = Image.new("RGBA", (bx_w, bx_h), (25, 25, 25, int(160 * (blur_opacity_pct / 100.0))))
+        blurred = crop.filter(ImageFilter.GaussianBlur(radius=max(3, int(12 * (blur_opacity_pct / 100.0)))))
+        dark_overlay = Image.new("RGBA", (bx_w, bx_h), (20, 20, 20, int(140 * (blur_opacity_pct / 100.0))))
         blurred = Image.alpha_composite(blurred.convert("RGBA"), dark_overlay)
         img.paste(blurred, (bx_x, bx_y))
 
-        draw = ImageDraw.Draw(img)
-        draw.rounded_rectangle(
-            [bx_x, bx_y, bx_x + bx_w, bx_y + bx_h],
-            radius=10,
-            outline=(249, 115, 22, 230),
-            width=max(2, iw // 180)
-        )
+        if active_mode != "blur":
+            draw = ImageDraw.Draw(img)
+            draw.rounded_rectangle([bx_x, bx_y, bx_x + bx_w, bx_y + bx_h], radius=6, outline=(234, 88, 12, 200), width=2)
 
-    if enable_wm and wm_text.strip():
-        wm_rgba = render_watermark_rgba(wm_text, font_path, wm_opacity_pct, wm_size_pct, iw)
-        if wm_rgba:
-            wx = min(max(6, int((iw - wm_rgba.width) * (wm_x_pct / 100.0))), iw - wm_rgba.width - 6)
-            wy = min(max(6, int((ih - wm_rgba.height) * (wm_y_pct / 100.0))), ih - wm_rgba.height - 6)
-            img.alpha_composite(wm_rgba, (wx, wy))
-
+    # မြန်မာစာတန်းထိုးကို ပုံပေါ်တွင် တိုက်ရိုက် ပြသခြင်း
     if show_sub:
-        sub_rgba = render_myanmar_subtitle_rgba(sample_text, font_path, sub_size_pct, iw, sub_color_hex, pill_bg=True)
-        sx = max(0, (iw - sub_rgba.width) // 2)
-        sy = min(max(4, int(ih * (sub_y_pct / 100.0)) - (sub_rgba.height // 2)), ih - sub_rgba.height - 4)
+        sub_rgba = render_myanmar_subtitle_rgba(sample_text, font_path, sub_size_pct, disp_w, sub_color_hex, pill_bg=False)
+        sc_x, sc_y = sub_center_disp
+        sx = min(max(2, sc_x - (sub_rgba.width // 2)), disp_w - sub_rgba.width - 2)
+        sy = min(max(2, sc_y - (sub_rgba.height // 2)), disp_h - sub_rgba.height - 2)
         img.alpha_composite(sub_rgba, (sx, sy))
 
-    return img.convert("RGB"), (bx_x, bx_y, bx_w, bx_h)
+    return img.convert("RGB")
 
 def split_into_short_lines(text: str, max_chars: int = 22) -> list:
     text = clean_text_for_myanmar_font(text)
@@ -563,7 +580,7 @@ def render_recapmm_final_video(
     blur_box_norm: tuple,
     blur_opacity_pct: int,
     show_sub: bool,
-    sub_y_pct: int,
+    sub_center_norm: tuple,
     wm_rgba: Image.Image,
     wm_x_pct: int,
     wm_y_pct: int,
@@ -576,10 +593,6 @@ def render_recapmm_final_video(
     vo_vol_pct: int,
     progress_bar
 ) -> str:
-    """
-    Resolution အကြည်လင်ဆုံးနှင့် MB ဖိုင်ဆိုဒ် အနည်းဆုံးဖြစ်စေမည့်
-    Smart CRF-24 + Maxrate 2.2Mbps Bitrate-Constrained H.264 Engine
-    """
     raw_out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
@@ -605,16 +618,16 @@ def render_recapmm_final_video(
         decode_vf = (
             f"{base_vf_str},split=2[vm][vc];"
             f"[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},gblur=sigma={sigma_val:.1f},"
-            f" eq=brightness=-0.18:contrast=0.9[vb];"
+            f"eq=brightness=-0.16:contrast=0.92[vb];"
             f"[vm][vb]overlay={bx_x}:{bx_y}"
         )
     else:
         decode_vf = base_vf_str
 
-    sub_center_y = int(vid_h * (sub_y_pct / 100.0))
+    sub_cx, sub_cy = sub_center_norm
 
     decoder_cmd = ["ffmpeg", "-v", "error", "-i", video_path, "-vf", decode_vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
-    # MB ဖိုင်ဆိုဒ် အနည်းဆုံးနှင့် ရုပ်ထွက် အကြည်လင်ဆုံး ဖြစ်စေမည့် -preset veryfast -crf 24 -maxrate 2200k
+    # Resolution အကြည်လင်ဆုံးနှင့် MB ဖိုင်ဆိုဒ် အနည်းဆုံး (CRF 24 + Maxrate 2.2Mbps)
     encoder_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-f", "rawvideo", "-vcodec", "rawvideo",
@@ -688,8 +701,8 @@ def render_recapmm_final_video(
                 frame_img.paste(wm_rgba, (wx, wy), wm_rgba)
             if active_sub is not None:
                 sub_rgba = active_sub["img"]
-                ox = max(0, (vid_w - sub_rgba.width) // 2)
-                oy = min(max(4, sub_center_y - (sub_rgba.height // 2)), vid_h - sub_rgba.height - 4)
+                ox = min(max(4, sub_cx - (sub_rgba.width // 2)), vid_w - sub_rgba.width - 4)
+                oy = min(max(4, sub_cy - (sub_rgba.height // 2)), vid_h - sub_rgba.height - 4)
                 frame_img.paste(sub_rgba, (ox, oy), sub_rgba)
             frame_to_write = frame_img.tobytes()
         else:
@@ -723,7 +736,6 @@ def render_recapmm_final_video(
     if frames_written == 0 or not os.path.exists(raw_out_video) or os.path.getsize(raw_out_video) < 1000:
         raise RuntimeError(f"Video Render မအောင်မြင်ပါ:\nDecoder: {dec_err}\nEncoder: {enc_err}")
 
-    # မူရင်း Video အသံနှင့် Voiceover အသံ ရောစပ်ခြင်း (128k AAC ဖြင့် ဖိုင်ဆိုဒ်ချုံ့သည်)
     vo_gain = max(0.1, vo_vol_pct / 100.0)
     if orig_vol_pct > 0:
         orig_gain = orig_vol_pct / 100.0
@@ -762,7 +774,7 @@ def render_recapmm_final_video(
 
 # ==================== SIDEBAR (API KEYS) ====================
 with st.sidebar:
-    st.markdown("### 🔑 API Keys Settings")
+    st.markdown("### 🔑 API Keys & Resolution")
     default_groq = st.secrets.get("GROQ_API_KEY", "") if "GROQ_API_KEY" in st.secrets else ""
     default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
     groq_key = st.text_input("Groq API Key", value=default_groq, type="password")
@@ -772,13 +784,18 @@ with st.sidebar:
     uploaded_font = st.file_uploader("Custom Font (.ttf) တင်ရန်", type=["ttf", "otf"])
     custom_font_path = register_uploaded_font(uploaded_font)
 
-# ==================== TOP BAR & VIDEO UPLOAD ====================
-uploaded_video = st.file_uploader("📁 Recap ပြုလုပ်မည့် Video ဖိုင်ရွေးပါ", type=["mp4", "mov", "mkv", "webm"])
-
+# ==================== SESSION STATE INITIALIZATION ====================
 if "enable_blur" not in st.session_state:
     st.session_state["enable_blur"] = True
 if "script_segments" not in st.session_state:
     st.session_state["script_segments"] = []
+if "blur_box_disp" not in st.session_state:
+    st.session_state["blur_box_disp"] = (16, 300, 208, 42)
+if "sub_center_disp" not in st.session_state:
+    st.session_state["sub_center_disp"] = (120, 321)
+
+# ==================== TOP BAR & VIDEO UPLOAD ====================
+uploaded_video = st.file_uploader("📁 Recap ပြုလုပ်မည့် Video ဖိုင်ရွေးပါ", type=["mp4", "mov", "mkv", "webm"])
 
 video_temp_path = None
 orig_w, orig_h, vid_fps, vid_dur = 720, 1280, 30.0, 0.0
@@ -801,11 +818,30 @@ if not default_groq or not default_gemini:
         groq_key = st.text_input("Groq API Key (gsk_...)", value=groq_key, type="password", key="main_groq")
         gemini_key = st.text_input("Gemini API Key (AIzaSy...)", value=gemini_key, type="password", key="main_gemini")
 
-# ==================== TOP PREVIEW & BLUR BOX CARD ====================
+# ==================== CARD 3 SETTINGS (PRE-LOAD FOR LIVE TOUCH CANVAS) ====================
+# ဖောင့်နှင့် စာတန်းအရောင်ကို အောက်က Card 3 နှင့် ချိတ်ဆက်ရန်
+active_font_path = find_font_path(st.session_state.get("font_choice_state", FONT_CHOICES[0]), custom_font_path)
+sub_color_hex = COLOR_PRESETS.get(st.session_state.get("color_label_state", "🔵 အပြာနု"), "#38BDF8")
+sub_size_pct = st.session_state.get("sub_size_state", 90)
+mirror_vid = st.session_state.get("mirror_state", False)
+show_sub = st.session_state.get("show_sub_state", True)
+
+# ==================== TOP INTERACTIVE TOUCH CANVAS (BLUR & SUBTITLE DRAG) ====================
+disp_w = 240 if orig_w <= orig_h else 320
+disp_h = int(round(orig_h * (disp_w / float(orig_w))))
+
 if video_temp_path:
     with st.container(border=True):
-        preview_placeholder = st.empty()
-        preview_sec = st.slider("⏱️ Video အချိန်ရွှေ့ကြည့်ရန်", 0.0, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
+        st.markdown("##### 🖐️ Video ပေါ်တွင် Blur နှင့် မြန်မာစာတန်းကို လက်ဖြင့် ဖိဆွဲ၍ ရွှေ့ပါ")
+
+        touch_target = st.radio(
+            "လက်ဖြင့် ဆွဲရွှေ့မည့်အရာ ရွေးချယ်ပါ -",
+            ["🌫️ Blur ဘောင်ကို လက်ဖြင့်ရွှေ့မည်", "📝 မြန်မာစာတန်းကို လက်ဖြင့်ရွှေ့မည်"],
+            horizontal=True
+        )
+        active_mode = "blur" if "Blur" in touch_target else "sub"
+
+        preview_sec = st.slider("⏱️ Video စက္ကန့်ရွှေ့ကြည့်ရန်", 0.0, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
 
         b_col1, b_col2 = st.columns(2)
         if b_col1.button("＋ စာတန်း Blur ထည့်မယ်", use_container_width=True):
@@ -814,14 +850,76 @@ if video_temp_path:
             st.session_state["enable_blur"] = False
 
         blur_opacity_pct = st.slider("Blur အထူ (Opacity %)", 0, 100, 100 if st.session_state["enable_blur"] else 0, 5)
-        with st.expander("📐 Blur အကွက် နှင့် စာတန်းနေရာ အသေးစိတ်ရွှေ့ရန်", expanded=False):
-            c_b1, c_b2, c_b3 = st.columns(3)
-            blur_y_pct = c_b1.slider("Blur အပေါ်/အောက်", 5, 95, 76, 1)
-            blur_h_pct = c_b2.slider("Blur အမြင့်", 4, 30, 11, 1)
-            blur_w_pct = c_b3.slider("Blur အကျယ်", 30, 100, 90, 2)
-            sub_y_pct = st.slider("မြန်မာစာတန်း အပေါ်/အောက် နေရာ (%)", 10, 95, 76, 1)
+
+        frame_bytes = extract_frame_bytes(video_temp_path, preview_sec, os.path.getsize(video_temp_path))
+        if frame_bytes:
+            sample_sub_txt = st.session_state["script_segments"][0]["translated"] if st.session_state.get("script_segments") else "ပြန်စရာအိမ်မရှိတော့တဲ့"
+
+            # လက်ရှိ သိမ်းထားသော နေရာများကို ယူခြင်း
+            cur_bx, cur_by, cur_bw, cur_bh = st.session_state["blur_box_disp"]
+            cur_by = min(max(10, cur_by), disp_h - 30)
+            cur_bh = min(max(18, cur_bh), disp_h - cur_by - 4)
+
+            cur_sx, cur_sy = st.session_state["sub_center_disp"]
+            cur_sy = min(max(15, cur_sy), disp_h - 15)
+
+            bg_pil = build_touch_canvas_background(
+                frame_bytes=frame_bytes,
+                disp_w=disp_w,
+                disp_h=disp_h,
+                active_mode=active_mode,
+                enable_blur=st.session_state["enable_blur"],
+                blur_box_disp=(cur_bx, cur_by, cur_bw, cur_bh),
+                blur_opacity_pct=blur_opacity_pct,
+                show_sub=show_sub,
+                sub_center_disp=(cur_sx, cur_sy),
+                sample_text=sample_sub_txt,
+                font_path=active_font_path,
+                sub_size_pct=sub_size_pct,
+                sub_color_hex=sub_color_hex,
+                mirror_vid=mirror_vid
+            )
+
+            pad_l, center_col, pad_r = st.columns([0.8, 2.4, 0.8])
+            with center_col:
+                if active_mode == "blur":
+                    st.caption("🟧 **လိမ္မော်ရောင် Blur ဘောင်ကို လက်ဖြင့် ဖိဆွဲ၍ နေရာရွှေ့ပါ / ထောင့်မှ အကြီးအသေးချဲ့ပါ**")
+                    def_coords = (cur_bx, min(disp_w - 4, cur_bx + cur_bw), cur_by, min(disp_h - 4, cur_by + cur_bh))
+                    box_dict = st_cropper(
+                        bg_pil,
+                        realtime_update=True,
+                        box_color="#EA580C",
+                        aspect_ratio=None,
+                        default_coords=def_coords,
+                        return_type="box",
+                        key="touch_drag_blur"
+                    )
+                    new_bx = max(0, int(box_dict["left"]))
+                    new_by = max(0, int(box_dict["top"]))
+                    new_bw = max(16, int(box_dict["width"]))
+                    new_bh = max(14, int(box_dict["height"]))
+                    st.session_state["blur_box_disp"] = (new_bx, new_by, new_bw, new_bh)
+                else:
+                    st.caption("🟦 **အပြာရောင် စာတန်းဘောင်ကို လက်ဖြင့် ဖိဆွဲပြီး ထားချင်သည့်နေရာသို့ ရွှေ့ပါ**")
+                    sub_box_w = int(disp_w * 0.82)
+                    sub_box_h = 34
+                    s_left = max(4, cur_sx - (sub_box_w // 2))
+                    s_top = max(4, cur_sy - (sub_box_h // 2))
+                    def_sub_coords = (s_left, min(disp_w - 4, s_left + sub_box_w), s_top, min(disp_h - 4, s_top + sub_box_h))
+                    sub_dict = st_cropper(
+                        bg_pil,
+                        realtime_update=True,
+                        box_color="#0284C7",
+                        aspect_ratio=None,
+                        default_coords=def_sub_coords,
+                        return_type="box",
+                        key="touch_drag_subtitle"
+                    )
+                    new_scx = int(sub_dict["left"] + (sub_dict["width"] // 2))
+                    new_scy = int(sub_dict["top"] + (sub_dict["height"] // 2))
+                    st.session_state["sub_center_disp"] = (new_scx, new_scy)
 else:
-    blur_opacity_pct, blur_y_pct, blur_h_pct, blur_w_pct, sub_y_pct = 100, 76, 11, 90, 76
+    blur_opacity_pct = 100
 
 # ==================== CARD 1: မြန်မာဘာသာပြန် SCRIPT ====================
 with st.container(border=True):
@@ -919,16 +1017,20 @@ with st.container(border=True):
     </div>
     """, unsafe_allow_html=True)
 
-    mirror_vid = st.toggle("ဘယ်ညာ ပြောင်းပြန်လှည့် (Mirror - Copyright ကာကွယ်ရန်)", value=False)
-    show_sub = st.toggle("မြန်မာစာတန်း video ထဲ ထည့်မယ်", value=True)
+    mirror_vid = st.toggle("ဘယ်ညာ ပြောင်းပြန်လှည့် (Mirror - Copyright ကာကွယ်ရန်)", value=False, key="mirror_state")
+    show_sub = st.toggle("မြန်မာစာတန်း video ထဲ ထည့်မယ်", value=True, key="show_sub_state")
 
-    font_choice = st.selectbox("ဖောင့် ရွေးချယ်ရန်", FONT_CHOICES, index=0)
+    font_choice = st.selectbox("ဖောင့် ရွေးချယ်ရန်", FONT_CHOICES, index=0, key="font_choice_state")
     active_font_path = find_font_path(font_choice, custom_font_path)
 
-    color_label = st.radio("စာလုံးအရောင်", list(COLOR_PRESETS.keys()), index=2, horizontal=True)
+    color_label = st.radio("စာလုံးအရောင်", list(COLOR_PRESETS.keys()), index=2, horizontal=True, key="color_label_state")
     sub_color_hex = COLOR_PRESETS[color_label]
 
-    sub_size_pct = st.slider("စာလုံးအရွယ် (%)", 60, 140, 90, 5)
+    sub_size_pct = st.slider("စာလုံးအရွယ် (%)", 60, 140, 90, 5, key="sub_size_state")
+    if st.button("🔄 စာတန်းနှင့် Blur နေရာ မူလအတိုင်း ပြန်ထားမယ်"):
+        st.session_state["blur_box_disp"] = (int(disp_w * 0.08), int(disp_h * 0.74), int(disp_w * 0.84), int(disp_h * 0.11))
+        st.session_state["sub_center_disp"] = (disp_w // 2, int(disp_h * 0.79))
+        st.rerun()
 
     st.divider()
     enable_wm = st.toggle("Channel Watermark ထည့်မယ်", value=True)
@@ -952,34 +1054,6 @@ with st.container(border=True):
         orig_vol_pct = st.slider("မူရင်းအသံ (%)", 0, 50, 0, 5)
         vo_vol_pct = st.slider("Voiceover အသံ (%)", 50, 200, 120, 10)
 
-# Live Preview ပုံကို အပေါ်ဆုံး Card ထဲသို့ ပြန်ထည့်ပေးခြင်း
-if video_temp_path:
-    frame_bytes = extract_frame_bytes(video_temp_path, preview_sec, os.path.getsize(video_temp_path))
-    if frame_bytes:
-        sample_sub_txt = st.session_state["script_segments"][0]["translated"] if st.session_state.get("script_segments") else "ပြန်စရာအိမ်မရှိတော့တဲ့"
-        prev_img, norm_blur_box = generate_recapmm_preview(
-            frame_bytes=frame_bytes,
-            enable_blur=st.session_state["enable_blur"],
-            blur_y_pct=blur_y_pct,
-            blur_h_pct=blur_h_pct,
-            blur_w_pct=blur_w_pct,
-            blur_opacity_pct=blur_opacity_pct,
-            show_sub=show_sub,
-            sub_y_pct=sub_y_pct,
-            sample_text=sample_sub_txt,
-            font_path=active_font_path,
-            sub_size_pct=sub_size_pct,
-            sub_color_hex=sub_color_hex,
-            enable_wm=enable_wm,
-            wm_text=wm_text,
-            wm_x_pct=wm_x_pct,
-            wm_y_pct=wm_y_pct,
-            wm_opacity_pct=wm_opacity_pct,
-            wm_size_pct=wm_size_pct,
-            mirror_vid=mirror_vid
-        )
-        preview_placeholder.image(prev_img, use_container_width=True)
-
 # ==================== CARD 4: ထုတ်ယူမယ် ====================
 with st.container(border=True):
     st.markdown("""
@@ -1001,7 +1075,6 @@ with st.container(border=True):
             try:
                 vid_w, vid_h = calculate_target_resolution(orig_w, orig_h, res_choice)
 
-                # အကယ်၍ Script မထုတ်ရသေးဘဲ တိုက်ရိုက်နှိပ်ပါက အလိုအလျောက် Script အရင်ထုတ်ပေးမည်
                 if not st.session_state.get("script_segments"):
                     status.write("🎧 ၁/၄ - Groq Whisper + Gemini 3.5 ဖြင့် Script ထုတ်ယူနေပါသည်...")
                     extracted_audio = extract_compressed_audio(video_temp_path)
@@ -1064,7 +1137,7 @@ with st.container(border=True):
                                 srt_blocks.append(f"{srt_counter}\n{format_srt_time(st_time)} --> {format_srt_time(et_time)}\n{c_str}\n")
                                 srt_counter += 1
                                 sub_rgba = render_myanmar_subtitle_rgba(
-                                    c_str, active_font_path, int(sub_size_pct), vid_w, sub_color_hex, pill_bg=True
+                                    c_str, active_font_path, int(sub_size_pct), vid_w, sub_color_hex, pill_bg=False
                                 )
                                 sub_overlays.append({"img": sub_rgba, "start": st_time, "end": et_time})
                                 loc_c += c_dur
@@ -1083,10 +1156,23 @@ with st.container(border=True):
                 status.write(f"🎞️ ၄/၄ - HD Video ({vid_w}x{vid_h}) ကို MB ဖိုင်ဆိုဒ်အနည်းဆုံးဖြင့် ပေါင်းစပ်နေပါသည်...")
                 p_bar = st.progress(0.0)
 
-                bx_w = max(16, int(vid_w * (blur_w_pct / 100.0)))
-                bx_h = max(16, int(vid_h * (blur_h_pct / 100.0)))
-                bx_x = (vid_w - bx_w) // 2
-                bx_y = min(max(0, int(vid_h * (blur_y_pct / 100.0))), vid_h - bx_h)
+                # လက်ဖြင့် ရွှေ့ထားသော Blur နှင့် စာတန်းထိုး နေရာများကို Target Video Resolution သို့ အချိုးကျ ပြန်တွက်ခြင်း
+                sx = vid_w / float(disp_w)
+                sy = vid_h / float(disp_h)
+
+                dbx, dby, dbw, dbh = st.session_state["blur_box_disp"]
+                norm_blur_box = (
+                    min(max(0, int(dbx * sx)), vid_w - 16),
+                    min(max(0, int(dby * sy)), vid_h - 16),
+                    max(16, min(vid_w, int(dbw * sx))),
+                    max(16, min(vid_h, int(dbh * sy)))
+                )
+
+                dsx, dsy = st.session_state["sub_center_disp"]
+                norm_sub_center = (
+                    min(max(10, int(dsx * sx)), vid_w - 10),
+                    min(max(10, int(dsy * sy)), vid_h - 10)
+                )
 
                 wm_rgba = render_watermark_rgba(wm_text, active_font_path, wm_opacity_pct, wm_size_pct, vid_w) if enable_wm else None
 
@@ -1099,10 +1185,10 @@ with st.container(border=True):
                     vid_h=vid_h,
                     vid_fps=vid_fps,
                     enable_blur=st.session_state["enable_blur"],
-                    blur_box_norm=(bx_x, bx_y, bx_w, bx_h),
+                    blur_box_norm=norm_blur_box,
                     blur_opacity_pct=blur_opacity_pct,
                     show_sub=show_sub,
-                    sub_y_pct=sub_y_pct,
+                    sub_center_norm=norm_sub_center,
                     wm_rgba=wm_rgba,
                     wm_x_pct=wm_x_pct,
                     wm_y_pct=wm_y_pct,
