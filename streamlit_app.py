@@ -9,91 +9,144 @@ from io import BytesIO
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 import streamlit as st
-from streamlit_cropper import st_cropper
 from groq import Groq
 from google import genai
 from google.genai import types
 import edge_tts
 
 st.set_page_config(
-    page_title="AI Video Dubbing Studio",
-    page_icon="🎬",
-    layout="wide",
+    page_title="RecapMM Studio",
+    page_icon="🍊",
+    layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# သပ်ရပ်လှပပြီး ဖုန်းမျက်နှာပြင်နှင့် ကွက်တိဖြစ်မည့် Compact Studio CSS
+# ==================== RECAPMM DARK & ORANGE THEME CSS ====================
 st.markdown("""
 <style>
+    .stApp {
+        background-color: #0d0d0d;
+        color: #f5f5f5;
+    }
     .block-container {
-        padding-top: 1rem;
-        padding-bottom: 2rem;
-        max-width: 950px;
+        padding-top: 0.8rem;
+        padding-bottom: 3rem;
+        max-width: 520px;
     }
-    .studio-header {
-        background: linear-gradient(135deg, #1e1b4b 0%, #311042 100%);
-        padding: 1rem 1.2rem;
-        border-radius: 14px;
-        border: 1px solid rgba(255,255,255,0.12);
-        margin-bottom: 1rem;
-        text-align: center;
+    .recap-topbar {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.65rem 1rem;
+        background: #141414;
+        border-bottom: 1px solid #2a2a2a;
+        border-radius: 12px;
+        margin-bottom: 0.8rem;
     }
-    .studio-header h1 {
-        margin: 0;
-        font-size: 1.3rem;
+    .recap-logo {
+        font-size: 1.35rem;
+        font-weight: 800;
+        color: #f97316;
+        letter-spacing: -0.5px;
+    }
+    .recap-logo span {
+        color: #ffffff;
+    }
+    .recap-badge {
+        background: #1f1f1f;
+        color: #d4d4d8;
+        padding: 0.25rem 0.65rem;
+        border-radius: 8px;
+        font-size: 0.8rem;
+        border: 1px solid #333;
+    }
+    .step-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0.5rem 0 0.8rem 0;
+    }
+    .step-circle {
+        background: #f97316;
+        color: #000000;
+        font-weight: 800;
+        width: 26px;
+        height: 26px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 0.85rem;
+    }
+    .step-title {
+        font-size: 1.1rem;
         font-weight: 700;
         color: #ffffff;
     }
-    .studio-header p {
-        margin: 0.25rem 0 0 0;
-        font-size: 0.82rem;
-        color: #cbd5e1;
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: #151210 !important;
+        border: 1px solid #2e241d !important;
+        border-radius: 16px !important;
+        padding: 0.85rem !important;
+        margin-bottom: 0.9rem !important;
     }
     div.stButton > button[kind="primary"] {
-        background: linear-gradient(90deg, #6366f1 0%, #ec4899 100%);
-        color: white;
-        border: none;
-        padding: 0.7rem 1.2rem;
-        font-weight: 600;
-        border-radius: 12px;
-        box-shadow: 0 4px 14px rgba(236, 72, 153, 0.35);
+        background: linear-gradient(90deg, #f97316 0%, #fb923c 100%) !important;
+        color: #0f0f0f !important;
+        font-weight: 700 !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 0.65rem 1rem !important;
+        box-shadow: 0 4px 14px rgba(249, 115, 22, 0.3) !important;
     }
-    /* Cropper ပုံကို ဖုန်းအလယ်တွင် သပ်ရပ်စွာ ချုံ့ထားရန် */
-    iframe[title="streamlit_cropper.st_cropper"] {
-        display: block;
-        margin: 0 auto;
-        border-radius: 10px;
-        border: 1px solid rgba(255,255,255,0.2);
+    div.stButton > button[kind="secondary"] {
+        background-color: #1f1b18 !important;
+        color: #f3f4f6 !important;
+        border: 1px solid #3d322c !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+    }
+    div.stDownloadButton > button {
+        background: linear-gradient(90deg, #f97316 0%, #fb923c 100%) !important;
+        color: #0f0f0f !important;
+        font-weight: 800 !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 0.75rem 1rem !important;
     }
 </style>
-<div class="studio-header">
-    <h1>✨ Myanmar Video Dubbing Studio</h1>
-    <p>Gemini 3.5 • Compact Touch Blur • Smooth HD Output</p>
-</div>
 """, unsafe_allow_html=True)
 
 USER_FONT_DIR = os.path.expanduser("~/.local/share/fonts")
 os.makedirs(USER_FONT_DIR, exist_ok=True)
 
-VOICES = {
-    "🇲🇲 Nilar (မိန်းကလေး)": "my-MM-NilarNeural",
-    "🇲🇲 Thiha (ယောက်ျားလေး)": "my-MM-ThihaNeural",
-    "🇺🇸 Aria (Female)": "en-US-AriaNeural",
-    "🇺🇸 Christopher (Male)": "en-US-ChristopherNeural",
-    "🇹🇭 Premwadee (Female)": "th-TH-PremwadeeNeural",
-    "🇯🇵 Nanami (Female)": "ja-JP-NanamiNeural",
-    "🇨🇳 Xiaoxiao (Female)": "zh-CN-XiaoxiaoNeural"
+# ဗီဒီယိုထဲကအတိုင်း အသံ (၆) မျိုး (မိန်းကလေး ၃၊ ယောက်ျားလေး ၃)
+VOICE_PRESETS = {
+    "မိန်းကလေး ၁ - တည်ငြိမ်": {"voice": "my-MM-NilarNeural", "rate": 0, "pitch": -2},
+    "မိန်းကလေး ၂ - ပေါ့ပါး": {"voice": "my-MM-NilarNeural", "rate": 8, "pitch": 2},
+    "မိန်းကလေး ၃ - နုပျို": {"voice": "my-MM-NilarNeural", "rate": 4, "pitch": 6},
+    "ယောက်ျား ၁ - တက်ကြွ": {"voice": "my-MM-ThihaNeural", "rate": 10, "pitch": 2},
+    "ယောက်ျား ၂ - လေးနက်": {"voice": "my-MM-ThihaNeural", "rate": 0, "pitch": -4},
+    "ယောက်ျား ၃ - စိတ်လှုပ်ရှား": {"voice": "my-MM-ThihaNeural", "rate": 14, "pitch": 4}
+}
+
+NARRATION_STYLES = {
+    "Direct Translation (မူရင်း POV နှင့် အဓိပ္ပာယ်ကို မပြောင်းဘဲ ဘာသာပြန်မယ်)": "direct",
+    "Third Person (ပြင်ပဇာတ်ကြောင်းပြောသူအနေနဲ့ ဖြစ်စဉ်ကို ပြောမယ်)": "third_person",
+    "First Person (အဓိကဇာတ်ကောင် ကိုယ်တိုင်ပြောသလို ပြောမယ်)": "first_person"
+}
+
+COLOR_PRESETS = {
+    "⚪ အဖြူ": "#FFFFFF",
+    "🟡 အဝါ": "#FFE600",
+    "🔵 အပြာနု": "#38BDF8",
+    "🌸 ပန်းရောင်": "#F472B6"
 }
 
 FONT_CHOICES = [
-    "Noto Sans Myanmar UI Bold",
-    "AJ 02 Regular"
-]
-
-RESOLUTION_CHOICES = [
-    "Original Resolution (မူရင်းအတိုင်း)",
-    "720p HD (အမြန်ဆုံး)",
-    "1080p Full HD (အကြည်လင်ဆုံး)"
+    "Noto Sans (မင်္ဂလာပါ)",
+    "Padauk (မင်္ဂလာပါ)",
+    "AJ 02 / Masterpiece (Custom .ttf)"
 ]
 
 def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
@@ -103,6 +156,7 @@ def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
     return (255, 255, 255, alpha)
 
 def clean_text_for_myanmar_font(text: str) -> str:
+    """လေးထောင့်ကွက် (Tofu □) လုံးဝမပေါ်စေရန် စာလုံးပိုများ သန့်စင်ခြင်း"""
     if not text:
         return ""
     text = re.sub(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u202a-\u202e\u2060-\u206f]", "", text)
@@ -130,6 +184,10 @@ def register_uploaded_font(uploaded_file) -> str:
 def find_font_path(font_choice: str, custom_font_path: str = None) -> str:
     if custom_font_path and os.path.exists(custom_font_path):
         return custom_font_path
+    if "Padauk" in font_choice:
+        res = subprocess.run(["fc-match", "-f", "%{file}", "Padauk"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.stdout.strip() and os.path.exists(res.stdout.strip()):
+            return res.stdout.strip()
     res = subprocess.run(["fc-match", "-f", "%{file}", "Noto Sans Myanmar"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     fpath = res.stdout.strip()
     if fpath and os.path.exists(fpath):
@@ -159,7 +217,7 @@ def get_video_info(file_path: str):
         dur = float(data["format"]["duration"])
         return align_to_8(w), align_to_8(h), fps, dur
     except Exception:
-        return 1280, 720, 30.0, 0.0
+        return 720, 1280, 30.0, 0.0
 
 def calculate_target_resolution(orig_w: int, orig_h: int, res_choice: str) -> tuple:
     if "1080p" in res_choice:
@@ -185,6 +243,23 @@ def get_media_duration(file_path: str) -> float:
     except Exception:
         return 0.0
 
+def format_mm_ss(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    mins = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{mins}:{secs:02d}"
+
+def format_srt_time(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    msecs = int(round((seconds - int(seconds)) * 1000))
+    if msecs >= 1000:
+        secs += 1
+        msecs -= 1000
+    return f"{hrs:02d}:{mins:02d}:{secs:02d},{msecs:03d}"
+
 def extract_compressed_audio(video_path: str) -> str:
     temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
     subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", temp_audio], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
@@ -202,11 +277,13 @@ def extract_frame_bytes(video_path: str, time_sec: float, file_size: int) -> byt
     return b""
 
 def render_myanmar_subtitle_rgba(
-    text: str, font_path: str, font_size_pt: int, stroke_px: int, vid_w: int,
-    text_hex: str = "#FFE600", outline_hex: str = "#000000"
+    text: str, font_path: str, size_scale_pct: int, vid_w: int,
+    text_hex: str = "#38BDF8", pill_bg: bool = True
 ) -> Image.Image:
+    """RecapMM စတိုင် အမည်းရောင် Pill ဘောင်အကြည်လေးနှင့် မြန်မာစာတန်းထိုး ပုံဖော်ခြင်း"""
     clean_txt = clean_text_for_myanmar_font(text) or " "
-    scaled_px = max(16, int(font_size_pt * (vid_w / 540.0)))
+    base_pt = 20 * (size_scale_pct / 100.0)
+    scaled_px = max(14, int(base_pt * (vid_w / 540.0)))
     try:
         font = ImageFont.truetype(font_path, scaled_px)
     except Exception:
@@ -221,20 +298,30 @@ def render_myanmar_subtitle_rgba(
     except Exception:
         tw, th, offset_x, offset_y = 300, 40, 0, 0
 
-    sp = max(1, int(round(stroke_px * (vid_w / 720.0))))
-    img_w, img_h = tw + (sp * 4) + 24, th + (sp * 4) + 20
+    sp = max(2, int(round(2.2 * (vid_w / 720.0))))
+    pad_x = int(18 * (vid_w / 720.0))
+    pad_y = int(10 * (vid_w / 720.0))
+    img_w = tw + (sp * 2) + (pad_x * 2)
+    img_h = th + (sp * 2) + (pad_y * 2)
 
     canvas = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(canvas)
-    x_pos, y_pos = (sp * 2) + 12 + offset_x, (sp * 2) + 10 + offset_y
 
+    if pill_bg:
+        draw.rounded_rectangle(
+            [2, 2, img_w - 2, img_h - 2],
+            radius=int(img_h * 0.35),
+            fill=(15, 15, 15, 165)
+        )
+
+    x_pos = pad_x + sp + offset_x
+    y_pos = pad_y + sp + offset_y
     text_rgba = hex_to_rgba(text_hex, 255)
-    outline_rgba = hex_to_rgba(outline_hex, 255)
 
     for ox in range(-sp, sp + 1):
         for oy in range(-sp, sp + 1):
             if ox != 0 or oy != 0:
-                draw.text((x_pos + ox, y_pos + oy), clean_txt, font=font, fill=outline_rgba)
+                draw.text((x_pos + ox, y_pos + oy), clean_txt, font=font, fill=(0, 0, 0, 255))
 
     draw.text((x_pos, y_pos), clean_txt, font=font, fill=text_rgba)
 
@@ -244,7 +331,90 @@ def render_myanmar_subtitle_rgba(
         canvas = canvas.resize((max_allowed_w, max(12, int(canvas.height * ratio))), Image.LANCZOS)
     return canvas
 
-def split_into_short_lines(text: str, max_chars: int = 20) -> list:
+def render_watermark_rgba(wm_text: str, font_path: str, wm_opacity_pct: int, wm_size_pct: int, vid_w: int) -> Image.Image:
+    clean_wm = wm_text.strip()
+    if not clean_wm:
+        return None
+    scaled_px = max(12, int(16 * (wm_size_pct / 100.0) * (vid_w / 540.0)))
+    try:
+        font = ImageFont.truetype(font_path, scaled_px)
+    except Exception:
+        font = ImageFont.load_default()
+
+    dummy = Image.new("RGBA", (10, 10))
+    d_draw = ImageDraw.Draw(dummy)
+    bbox = d_draw.textbbox((0, 0), clean_wm, font=font)
+    tw, th = max(10, bbox[2] - bbox[0]), max(10, bbox[3] - bbox[1])
+    alpha_val = int(255 * (wm_opacity_pct / 100.0))
+
+    canvas = Image.new("RGBA", (tw + 16, th + 12), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.text((8 - bbox[0], 6 - bbox[1]), clean_wm, font=font, fill=(255, 255, 255, alpha_val))
+    return canvas
+
+def generate_recapmm_preview(
+    frame_bytes: bytes,
+    enable_blur: bool,
+    blur_y_pct: int,
+    blur_h_pct: int,
+    blur_w_pct: int,
+    blur_opacity_pct: int,
+    show_sub: bool,
+    sub_y_pct: int,
+    sample_text: str,
+    font_path: str,
+    sub_size_pct: int,
+    sub_color_hex: str,
+    enable_wm: bool,
+    wm_text: str,
+    wm_x_pct: int,
+    wm_y_pct: int,
+    wm_opacity_pct: int,
+    wm_size_pct: int,
+    mirror_vid: bool
+):
+    img = Image.open(BytesIO(frame_bytes)).convert("RGBA")
+    if mirror_vid:
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
+    iw, ih = img.size
+
+    bx_w = max(16, int(iw * (blur_w_pct / 100.0)))
+    bx_h = max(16, int(ih * (blur_h_pct / 100.0)))
+    bx_x = (iw - bx_w) // 2
+    bx_y = min(max(0, int(ih * (blur_y_pct / 100.0))), ih - bx_h)
+
+    if enable_blur and blur_opacity_pct > 0:
+        crop = img.crop((bx_x, bx_y, bx_x + bx_w, bx_y + bx_h))
+        blurred = crop.filter(ImageFilter.GaussianBlur(radius=max(4, int(18 * (blur_opacity_pct / 100.0)))))
+        # Blur ပေါ်တွင် မူရင်းစာသား လုံးဝမမြင်ရစေရန် Dark Tint နှင့် ပေါင်းစပ်ခြင်း
+        dark_overlay = Image.new("RGBA", (bx_w, bx_h), (25, 25, 25, int(160 * (blur_opacity_pct / 100.0))))
+        blurred = Image.alpha_composite(blurred.convert("RGBA"), dark_overlay)
+        img.paste(blurred, (bx_x, bx_y))
+
+        draw = ImageDraw.Draw(img)
+        draw.rounded_rectangle(
+            [bx_x, bx_y, bx_x + bx_w, bx_y + bx_h],
+            radius=10,
+            outline=(249, 115, 22, 230),
+            width=max(2, iw // 180)
+        )
+
+    if enable_wm and wm_text.strip():
+        wm_rgba = render_watermark_rgba(wm_text, font_path, wm_opacity_pct, wm_size_pct, iw)
+        if wm_rgba:
+            wx = min(max(6, int((iw - wm_rgba.width) * (wm_x_pct / 100.0))), iw - wm_rgba.width - 6)
+            wy = min(max(6, int((ih - wm_rgba.height) * (wm_y_pct / 100.0))), ih - wm_rgba.height - 6)
+            img.alpha_composite(wm_rgba, (wx, wy))
+
+    if show_sub:
+        sub_rgba = render_myanmar_subtitle_rgba(sample_text, font_path, sub_size_pct, iw, sub_color_hex, pill_bg=True)
+        sx = max(0, (iw - sub_rgba.width) // 2)
+        sy = min(max(4, int(ih * (sub_y_pct / 100.0)) - (sub_rgba.height // 2)), ih - sub_rgba.height - 4)
+        img.alpha_composite(sub_rgba, (sx, sy))
+
+    return img.convert("RGB"), (bx_x, bx_y, bx_w, bx_h)
+
+def split_into_short_lines(text: str, max_chars: int = 22) -> list:
     text = clean_text_for_myanmar_font(text)
     if not text:
         return []
@@ -268,18 +438,7 @@ def split_into_short_lines(text: str, max_chars: int = 20) -> list:
         chunks.append(current.strip())
     return chunks
 
-def format_srt_time(seconds: float) -> str:
-    seconds = max(0.0, seconds)
-    hrs = int(seconds // 3600)
-    mins = int((seconds % 3600) // 60)
-    secs = int(seconds % 60)
-    msecs = int(round((seconds - int(seconds)) * 1000))
-    if msecs >= 1000:
-        secs += 1
-        msecs -= 1000
-    return f"{hrs:02d}:{mins:02d}:{secs:02d},{msecs:03d}"
-
-def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_dur: float = 6.5) -> list:
+def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_dur: float = 6.0) -> list:
     merged = []
     for seg in raw_segments:
         text = seg.get("text", "").strip() if isinstance(seg, dict) else getattr(seg, "text", "").strip()
@@ -294,14 +453,24 @@ def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_d
             merged.append({"start": start, "end": end, "text": text})
     return merged
 
-def translate_segments_with_fallback(gemini_client, groq_client, preferred_model: str, segments: list, target_lang: str, status_box):
-    fallback_models = [
-        preferred_model.strip(),
-        "gemini-3.5-flash",
-        "gemini-3.8-flash",
-        "gemini-3.1-flash-lite-preview",
-        "gemini-2.5-flash"
-    ]
+def translate_segments_recap_style(gemini_client, groq_client, preferred_model: str, segments: list, style_mode: str):
+    if style_mode == "third_person":
+        style_instr = (
+            "Rewrite and translate into natural Burmese (Myanmar) as a THIRD-PERSON movie recap narrator "
+            "(ပြင်ပဇာတ်ကြောင်းပြောသူအနေဖြင့် ဖြစ်စဉ်ကို ပြောပြသည့်ပုံစံ). Keep each line concise."
+        )
+    elif style_mode == "first_person":
+        style_instr = (
+            "Rewrite and translate into natural Burmese (Myanmar) from a FIRST-PERSON perspective "
+            "(အဓိကဇာတ်ကောင် ကိုယ်တိုင် 'ကျွန်တော်/ကျွန်မ' ဟု ပြောပြသည့်ပုံစံ). Keep each line concise."
+        )
+    else:
+        style_instr = (
+            "Translate directly and naturally into spoken Burmese (Myanmar) keeping the original POV and meaning "
+            "(မူရင်း POV နှင့် အဓိပ္ပာယ် မပြောင်းဘဲ တိုက်ရိုက်ဘာသာပြန်ရန်). Keep each line concise."
+        )
+
+    fallback_models = [preferred_model.strip(), "gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]
     model_chain = []
     for m in fallback_models:
         if m not in model_chain:
@@ -312,14 +481,13 @@ def translate_segments_with_fallback(gemini_client, groq_client, preferred_model
         batch = segments[i:i + batch_size]
         payload = [{"id": idx, "text": s["text"]} for idx, s in enumerate(batch)]
         prompt = (
-            f"Translate each 'text' field into natural, concise spoken {target_lang} for video dubbing. "
-            f"Do not use emojis or special symbols. Return ONLY a JSON list of objects with 'id' and 'translation':\n"
-            f"{json.dumps(payload, ensure_ascii=False)}"
+            f"{style_instr}\nDo not use emojis or special symbols. "
+            f"Return ONLY a JSON list of objects with 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"
         )
 
-        translated_success = False
+        translated_ok = False
         for model_name in model_chain:
-            for attempt in range(2):
+            for _ in range(2):
                 try:
                     resp = gemini_client.models.generate_content(
                         model=model_name,
@@ -332,25 +500,22 @@ def translate_segments_with_fallback(gemini_client, groq_client, preferred_model
                     t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if "id" in item}
                     for idx, s in enumerate(batch):
                         s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
-                    translated_success = True
+                    translated_ok = True
                     break
                 except Exception as e:
-                    err_str = str(e)
-                    if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                    if "503" in str(e) or "429" in str(e):
                         time.sleep(1.5)
                         continue
-                    else:
-                        break
-            if translated_success:
+                    break
+            if translated_ok:
                 break
 
-        if not translated_success:
-            status_box.write("🔄 Backup AI (Llama-3.3-70B) ဖြင့် ဘာသာပြန်နေပါသည်...")
+        if not translated_ok:
             groq_resp = groq_client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[
-                    {"role": "system", "content": f"Translate accurately into natural spoken {target_lang} without emojis. Output valid JSON only."},
-                    {"role": "user", "content": f"Return a JSON object with key 'items' containing a list of objects with 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"}
+                    {"role": "system", "content": f"{style_instr} Output valid JSON only."},
+                    {"role": "user", "content": f"Return JSON object with key 'items' containing list of 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"}
                 ],
                 response_format={"type": "json_object"}
             )
@@ -366,7 +531,7 @@ async def synthesize_all_tts(segments, voice_id, rate_str, pitch_str):
         async with sem:
             raw_mp3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
             trimmed_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-            comm = edge_tts.Communicate(text=text, voice=voice_id, rate=rate_str, pitch=pitch_str)
+            comm = edge_tts.Communicate(text=text or " ", voice=voice_id, rate=rate_str, pitch=pitch_str)
             with open(raw_mp3, "wb") as f:
                 async for chunk in comm.stream():
                     if chunk["type"] == "audio":
@@ -386,35 +551,77 @@ async def synthesize_all_tts(segments, voice_id, rate_str, pitch_str):
 
     return await asyncio.gather(*[_one(i, s["translated"]) for i, s in enumerate(segments)])
 
-def render_smooth_final_video(
-    video_path: str, audio_path: str, timeline: list, sub_overlays: list,
-    vid_w: int, vid_h: int, vid_fps: float,
-    enable_blur: bool, blur_box_norm: tuple, blur_power: int, progress_bar
+def render_recapmm_final_video(
+    video_path: str,
+    tts_audio_path: str,
+    timeline: list,
+    sub_overlays: list,
+    vid_w: int,
+    vid_h: int,
+    vid_fps: float,
+    enable_blur: bool,
+    blur_box_norm: tuple,
+    blur_opacity_pct: int,
+    show_sub: bool,
+    sub_y_pct: int,
+    wm_rgba: Image.Image,
+    wm_x_pct: int,
+    wm_y_pct: int,
+    mirror_vid: bool,
+    zoom_pct: int,
+    brightness_val: float,
+    contrast_val: float,
+    saturation_val: float,
+    orig_vol_pct: int,
+    vo_vol_pct: int,
+    progress_bar
 ) -> str:
+    """
+    Resolution အကြည်လင်ဆုံးနှင့် MB ဖိုင်ဆိုဒ် အနည်းဆုံးဖြစ်စေမည့်
+    Smart CRF-24 + Maxrate 2.2Mbps Bitrate-Constrained H.264 Engine
+    """
     raw_out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
-    bx_x, bx_y, bx_w, bx_h = blur_box_norm
-    sigma_val = max(2.0, float(blur_power))
+    vf_chain = [f"fps={vid_fps:.2f}"]
+    if mirror_vid:
+        vf_chain.append("hflip")
 
-    if enable_blur and bx_w >= 8 and bx_h >= 8:
+    if zoom_pct > 100:
+        zf = zoom_pct / 100.0
+        vf_chain.append(f"scale=iw*{zf:.3f}:ih*{zf:.3f},crop=iw/{zf:.3f}:ih/{zf:.3f}")
+
+    vf_chain.append(f"scale={vid_w}:{vid_h}:flags=bicubic,setsar=1")
+
+    if abs(brightness_val) > 0.01 or abs(contrast_val - 1.0) > 0.01 or abs(saturation_val - 1.0) > 0.01:
+        vf_chain.append(f"eq=brightness={brightness_val:.2f}:contrast={contrast_val:.2f}:saturation={saturation_val:.2f}")
+
+    vf_chain.append("format=rgb24")
+    base_vf_str = ",".join(vf_chain)
+
+    bx_x, bx_y, bx_w, bx_h = blur_box_norm
+    if enable_blur and blur_opacity_pct > 0 and bx_w >= 8 and bx_h >= 8:
+        sigma_val = max(3.0, 22.0 * (blur_opacity_pct / 100.0))
         decode_vf = (
-            f"fps={vid_fps:.2f},scale={vid_w}:{vid_h}:flags=bicubic,setsar=1,format=rgb24,"
-            f"split=2[vm][vc];[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},gblur=sigma={sigma_val:.1f}[vb];"
+            f"{base_vf_str},split=2[vm][vc];"
+            f"[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},gblur=sigma={sigma_val:.1f},"
+            f" eq=brightness=-0.18:contrast=0.9[vb];"
             f"[vm][vb]overlay={bx_x}:{bx_y}"
         )
     else:
-        decode_vf = f"fps={vid_fps:.2f},scale={vid_w}:{vid_h}:flags=bicubic,setsar=1,format=rgb24"
+        decode_vf = base_vf_str
 
-    center_y = bx_y + (bx_h // 2)
+    sub_center_y = int(vid_h * (sub_y_pct / 100.0))
 
     decoder_cmd = ["ffmpeg", "-v", "error", "-i", video_path, "-vf", decode_vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    # MB ဖိုင်ဆိုဒ် အနည်းဆုံးနှင့် ရုပ်ထွက် အကြည်လင်ဆုံး ဖြစ်စေမည့် -preset veryfast -crf 24 -maxrate 2200k
     encoder_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-f", "rawvideo", "-vcodec", "rawvideo",
         "-s", f"{vid_w}x{vid_h}", "-pix_fmt", "rgb24", "-r", f"{vid_fps:.2f}",
         "-i", "pipe:0",
-        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "20",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+        "-maxrate", "2200k", "-bufsize", "4400k",
         "-profile:v", "main", "-pix_fmt", "yuv420p", "-threads", "2",
         raw_out_video
     ]
@@ -441,6 +648,11 @@ def render_smooth_final_video(
     num_subs = len(sub_overlays)
     frames_written = 0
 
+    wx, wy = 0, 0
+    if wm_rgba is not None:
+        wx = min(max(6, int((vid_w - wm_rgba.width) * (wm_x_pct / 100.0))), vid_w - wm_rgba.width - 6)
+        wy = min(max(6, int((vid_h - wm_rgba.height) * (wm_y_pct / 100.0))), vid_h - wm_rgba.height - 6)
+
     for out_idx in range(total_out_frames):
         t_out = out_idx / float(vid_fps)
         while seg_ptr < len(time_segments) - 1 and t_out >= time_segments[seg_ptr]["out_end"]:
@@ -463,19 +675,22 @@ def render_smooth_final_video(
         if curr_in_frame_bytes is None:
             break
 
-        while sub_ptr < num_subs and sub_overlays[sub_ptr]["end"] < t_out:
-            sub_ptr += 1
-
         active_sub = None
-        if sub_ptr < num_subs and sub_overlays[sub_ptr]["start"] <= t_out <= sub_overlays[sub_ptr]["end"]:
-            active_sub = sub_overlays[sub_ptr]
+        if show_sub:
+            while sub_ptr < num_subs and sub_overlays[sub_ptr]["end"] < t_out:
+                sub_ptr += 1
+            if sub_ptr < num_subs and sub_overlays[sub_ptr]["start"] <= t_out <= sub_overlays[sub_ptr]["end"]:
+                active_sub = sub_overlays[sub_ptr]
 
-        if active_sub is not None:
+        if active_sub is not None or wm_rgba is not None:
             frame_img = Image.frombytes("RGB", (vid_w, vid_h), curr_in_frame_bytes)
-            sub_rgba = active_sub["img"]
-            ox = max(0, (vid_w - sub_rgba.width) // 2)
-            oy = min(max(4, center_y - (sub_rgba.height // 2)), vid_h - sub_rgba.height - 4)
-            frame_img.paste(sub_rgba, (ox, oy), sub_rgba)
+            if wm_rgba is not None:
+                frame_img.paste(wm_rgba, (wx, wy), wm_rgba)
+            if active_sub is not None:
+                sub_rgba = active_sub["img"]
+                ox = max(0, (vid_w - sub_rgba.width) // 2)
+                oy = min(max(4, sub_center_y - (sub_rgba.height // 2)), vid_h - sub_rgba.height - 4)
+                frame_img.paste(sub_rgba, (ox, oy), sub_rgba)
             frame_to_write = frame_img.tobytes()
         else:
             frame_to_write = curr_in_frame_bytes
@@ -508,62 +723,65 @@ def render_smooth_final_video(
     if frames_written == 0 or not os.path.exists(raw_out_video) or os.path.getsize(raw_out_video) < 1000:
         raise RuntimeError(f"Video Render မအောင်မြင်ပါ:\nDecoder: {dec_err}\nEncoder: {enc_err}")
 
-    subprocess.run([
-        "ffmpeg", "-y", "-v", "error",
-        "-i", raw_out_video, "-i", audio_path,
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
-        "-movflags", "+faststart", "-shortest", web_ready_video
-    ], check=True)
+    # မူရင်း Video အသံနှင့် Voiceover အသံ ရောစပ်ခြင်း (128k AAC ဖြင့် ဖိုင်ဆိုဒ်ချုံ့သည်)
+    vo_gain = max(0.1, vo_vol_pct / 100.0)
+    if orig_vol_pct > 0:
+        orig_gain = orig_vol_pct / 100.0
+        af_mix = f"[1:a]volume={vo_gain:.2f}[vo];[2:a]volume={orig_gain:.2f}[oa];[vo][oa]amix=inputs=2:duration=first:normalize=0[aout]"
+        mux_cmd = [
+            "ffmpeg", "-y", "-v", "error",
+            "-i", raw_out_video, "-i", tts_audio_path, "-i", video_path,
+            "-filter_complex", af_mix,
+            "-map", "0:v:0", "-map", "[aout]",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", "-shortest", web_ready_video
+        ]
+        res = subprocess.run(mux_cmd)
+        if res.returncode != 0:
+            subprocess.run([
+                "ffmpeg", "-y", "-v", "error",
+                "-i", raw_out_video, "-i", tts_audio_path,
+                "-map", "0:v:0", "-map", "1:a:0",
+                "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+                "-movflags", "+faststart", "-shortest", web_ready_video
+            ], check=True)
+    else:
+        subprocess.run([
+            "ffmpeg", "-y", "-v", "error",
+            "-i", raw_out_video, "-i", tts_audio_path,
+            "-af", f"volume={vo_gain:.2f}",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", "-shortest", web_ready_video
+        ], check=True)
 
     if os.path.exists(raw_out_video):
         os.remove(raw_out_video)
     progress_bar.progress(1.0)
     return web_ready_video
 
-# ==================== SIDEBAR SETTINGS (ဘယ်ဘက်အပေါ် >> နှိပ်၍ ဖွင့်ရန်) ====================
+# ==================== SIDEBAR (API KEYS) ====================
 with st.sidebar:
-    st.markdown("### ⚙️ Studio Settings")
+    st.markdown("### 🔑 API Keys Settings")
+    default_groq = st.secrets.get("GROQ_API_KEY", "") if "GROQ_API_KEY" in st.secrets else ""
+    default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
+    groq_key = st.text_input("Groq API Key", value=default_groq, type="password")
+    gemini_key = st.text_input("Gemini API Key", value=default_gemini, type="password")
+    gemini_model = st.selectbox("Gemini Model", ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"])
+    res_choice = st.selectbox("Video Resolution", ["720p HD (ဖိုင်ဆိုဒ်သေး & အကြည်လင်ဆုံး)", "Original Resolution", "1080p Full HD"])
+    uploaded_font = st.file_uploader("Custom Font (.ttf) တင်ရန်", type=["ttf", "otf"])
+    custom_font_path = register_uploaded_font(uploaded_font)
 
-    with st.expander("🔑 API Keys & AI Model", expanded=True):
-        default_groq = st.secrets.get("GROQ_API_KEY", "") if "GROQ_API_KEY" in st.secrets else ""
-        default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
-        groq_key = st.text_input("Groq API Key", value=default_groq, type="password")
-        gemini_key = st.text_input("Gemini API Key", value=default_gemini, type="password")
-        gemini_model = st.selectbox(
-            "AI Model",
-            ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"],
-            index=0
-        )
-        target_lang = st.selectbox("ဘာသာစကား", ["Burmese (Myanmar)", "English", "Thai", "Japanese", "Chinese"])
+# ==================== TOP BAR & VIDEO UPLOAD ====================
+uploaded_video = st.file_uploader("📁 Recap ပြုလုပ်မည့် Video ဖိုင်ရွေးပါ", type=["mp4", "mov", "mkv", "webm"])
 
-    with st.expander("🎙️ TTS အသံချိန်ညှိမှု", expanded=True):
-        voice_label = st.selectbox("TTS အသံ", list(VOICES.keys()))
-        speed_pct = st.slider("Speed (%)", -100, 100, 0, 5)
-        pitch_hz = st.slider("Pitch (Hz)", -50, 50, 0, 2)
-        vol_boost = st.slider("Volume Boost (dB)", 0, 15, 6, 1)
-
-    with st.expander("🎨 Font နှင့် စာတန်းအရောင်", expanded=True):
-        res_choice = st.selectbox("Video Resolution", RESOLUTION_CHOICES)
-        font_choice = st.selectbox("မြန်မာ Font", FONT_CHOICES)
-        uploaded_font = st.file_uploader("Custom Font (.ttf)", type=["ttf", "otf"])
-        custom_font_path = register_uploaded_font(uploaded_font)
-        active_font_path = find_font_path(font_choice, custom_font_path)
-
-        c1, c2 = st.columns(2)
-        sub_text_color = c1.color_picker("စာသားအရောင်", "#FFE600")
-        sub_outline_color = c2.color_picker("Outline အရောင်", "#000000")
-
-        font_size = st.slider("Font Size", 12, 30, 18, 1)
-        max_chars = st.slider("တစ်ကြောင်း စာလုံးရေ", 10, 35, 20, 2)
-        outline_w = st.slider("Outline အထူ", 1.0, 5.0, 2.0, 0.5)
-
-# ==================== MAIN WORKSPACE ====================
-uploaded_video = st.file_uploader("📁 Video ဖိုင်ရွေးပါ (MP4, MOV, MKV)", type=["mp4", "mov", "mkv", "webm"])
+if "enable_blur" not in st.session_state:
+    st.session_state["enable_blur"] = True
+if "script_segments" not in st.session_state:
+    st.session_state["script_segments"] = []
 
 video_temp_path = None
-drag_box_coords = (0, 0, 100, 50)
-orig_w, orig_h, vid_fps, vid_dur = 1280, 720, 30.0, 0.0
+orig_w, orig_h, vid_fps, vid_dur = 720, 1280, 30.0, 0.0
 
 if uploaded_video:
     video_temp_path = os.path.join(tempfile.gettempdir(), "input_source_video.mp4")
@@ -571,206 +789,361 @@ if uploaded_video:
         f.write(uploaded_video.getbuffer())
     orig_w, orig_h, vid_fps, vid_dur = get_video_info(video_temp_path)
 
+st.markdown(f"""
+<div class="recap-topbar">
+    <div class="recap-logo">Recap<span>MM</span></div>
+    <div class="recap-badge">ကြာချိန် {format_mm_ss(vid_dur)}</div>
+</div>
+""", unsafe_allow_html=True)
+
+if not default_groq or not default_gemini:
+    with st.expander("🔑 API Keys ထည့်သွင်းရန် (နှိပ်၍ဖွင့်ပါ)", expanded=not (groq_key and gemini_key)):
+        groq_key = st.text_input("Groq API Key (gsk_...)", value=groq_key, type="password", key="main_groq")
+        gemini_key = st.text_input("Gemini API Key (AIzaSy...)", value=gemini_key, type="password", key="main_gemini")
+
+# ==================== TOP PREVIEW & BLUR BOX CARD ====================
+if video_temp_path:
     with st.container(border=True):
-        c_t1, c_t2 = st.columns([1.2, 1])
-        enable_blur = c_t1.toggle("🌫️ မူရင်းစာတန်းကို Blur ဖုံးမည်", value=True)
-        preview_sec = c_t2.slider("Preview စက္ကန့်", 0.5, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
+        preview_placeholder = st.empty()
+        preview_sec = st.slider("⏱️ Video အချိန်ရွှေ့ကြည့်ရန်", 0.0, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
 
-        # ဖုန်းပေါ်တွင် အပေါ်အောက် အလွယ်တကူ ရွှေ့နိုင်ရန် Quick Position Slider နှင့် Touch Box နှစ်မျိုးလုံး ပေးထားသည်
-        s_col1, s_col2, s_col3 = st.columns(3)
-        y_pos_pct = s_col1.slider("အပေါ်/အောက် နေရာ (%)", 10, 92, 76, 1)
-        box_h_pct = s_col2.slider("ဘောင်အမြင့် (%)", 5, 30, 12, 1)
-        blur_power = s_col3.slider("Blur အပြင်းအပျော့", 10, 45, 22, 2)
+        b_col1, b_col2 = st.columns(2)
+        if b_col1.button("＋ စာတန်း Blur ထည့်မယ်", use_container_width=True):
+            st.session_state["enable_blur"] = True
+        if b_col2.button("🗑️ Blur အားလုံးဖျက်", use_container_width=True):
+            st.session_state["enable_blur"] = False
 
-        frame_bytes = extract_frame_bytes(video_temp_path, preview_sec, os.path.getsize(video_temp_path))
-        if frame_bytes:
-            raw_pil = Image.open(BytesIO(frame_bytes)).convert("RGB")
-            # ဖုန်းမျက်နှာပြင်တွင် ချောင်ချောင်ချိချိ ရွှေ့နိုင်ရန် ပုံကို 240px သို့ သေးသေးလေး ချုံ့ထားသည်
-            disp_w = 240 if orig_w <= orig_h else 320
-            disp_h = int(round(orig_h * (disp_w / float(orig_w))))
-            resized_pil = raw_pil.resize((disp_w, disp_h), Image.LANCZOS)
-
-            st.caption("👇 **ပုံကို သေးသေးလေး ချုံ့ပေးထားပါသည် (ဘောင်ကို လက်ဖြင့်ဆွဲရွှေ့နိုင်သလို အပေါ်က Slider ဖြင့်လည်း အပေါ်/အောက် ရွှေ့နိုင်သည်)**")
-
-            top_px = int(disp_h * (y_pos_pct / 100.0))
-            bot_px = min(disp_h - 4, top_px + max(14, int(disp_h * (box_h_pct / 100.0))))
-            def_coords = (
-                int(disp_w * 0.08),
-                int(disp_w * 0.92),
-                top_px,
-                bot_px
-            )
-
-            # ဘေးနှစ်ဖက်တွင် နေရာလွတ်ချန်ထားသဖြင့် ဖုန်းပေါ်တွင် အပေါ်/အောက် Scroll ဆွဲရန် လုံးဝမညပ်တော့ပါ
-            pad_l, center_col, pad_r = st.columns([1, 2, 1])
-            with center_col:
-                box_dict = st_cropper(
-                    resized_pil,
-                    realtime_update=True,
-                    box_color="#00FF66",
-                    aspect_ratio=None,
-                    default_coords=def_coords,
-                    return_type="box",
-                    key=f"compact_cropper_{y_pos_pct}_{box_h_pct}"
-                )
-
-            sx = orig_w / float(disp_w)
-            sy = orig_h / float(disp_h)
-            bx_x = max(0, int(box_dict["left"] * sx))
-            bx_y = max(0, int(box_dict["top"] * sy))
-            bx_w = max(16, int(box_dict["width"] * sx))
-            bx_h = max(16, int(box_dict["height"] * sy))
-            drag_box_coords = (bx_x, bx_y, bx_w, bx_h)
+        blur_opacity_pct = st.slider("Blur အထူ (Opacity %)", 0, 100, 100 if st.session_state["enable_blur"] else 0, 5)
+        with st.expander("📐 Blur အကွက် နှင့် စာတန်းနေရာ အသေးစိတ်ရွှေ့ရန်", expanded=False):
+            c_b1, c_b2, c_b3 = st.columns(3)
+            blur_y_pct = c_b1.slider("Blur အပေါ်/အောက်", 5, 95, 76, 1)
+            blur_h_pct = c_b2.slider("Blur အမြင့်", 4, 30, 11, 1)
+            blur_w_pct = c_b3.slider("Blur အကျယ်", 30, 100, 90, 2)
+            sub_y_pct = st.slider("မြန်မာစာတန်း အပေါ်/အောက် နေရာ (%)", 10, 95, 76, 1)
 else:
-    enable_blur = True
-    blur_power = 22
+    blur_opacity_pct, blur_y_pct, blur_h_pct, blur_w_pct, sub_y_pct = 100, 76, 11, 90, 76
 
-start_btn = st.button("🚀 စတင်ပေါင်းစပ်မည် (Generate Smooth HD Video)", type="primary", use_container_width=True)
+# ==================== CARD 1: မြန်မာဘာသာပြန် SCRIPT ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-header">
+        <div class="step-circle">1</div>
+        <div class="step-title">မြန်မာဘာသာပြန် Script</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-if start_btn:
-    if not video_temp_path:
-        st.error("ကျေးဇူးပြု၍ Video ဖိုင် အရင် Upload တင်ပေးပါ။")
-    elif not groq_key or not gemini_key:
-        st.error("ဘယ်ဘက်အပေါ်ထောင့်ရှိ `>>` (Sidebar) ကိုနှိပ်ပြီး Groq နှင့် Gemini API Key များ ထည့်ပေးပါ။")
-    else:
-        status = st.status("⏳ AI Video Dubbing စတင်နေပါသည်...", expanded=True)
-        try:
-            vid_w, vid_h = calculate_target_resolution(orig_w, orig_h, res_choice)
+    narration_label = st.radio("ဇာတ်ကြောင်းပုံစံ", list(NARRATION_STYLES.keys()), index=0)
+    style_mode = NARRATION_STYLES[narration_label]
 
-            status.write("🎧 ၁/၄ - Groq Whisper ဖြင့် အသံနားထောင်နေပါသည်...")
-            extracted_audio = extract_compressed_audio(video_temp_path)
-            groq_client = Groq(api_key=groq_key.strip())
-            with open(extracted_audio, "rb") as f:
-                trans = groq_client.audio.transcriptions.create(
-                    file=(extracted_audio, f.read()),
-                    model="whisper-large-v3-turbo",
-                    response_format="verbose_json"
+    if st.button("🪄 Script ပြန်ထုတ်မယ်", type="primary", use_container_width=True):
+        if not video_temp_path:
+            st.error("Video အရင်တင်ပေးပါ။")
+        elif not groq_key or not gemini_key:
+            st.error("Groq နှင့် Gemini API Key နှစ်ခုလုံး ထည့်ပေးပါ။")
+        else:
+            with st.spinner("Groq Whisper + Gemini 3.5 ဖြင့် မြန်မာ Script ထုတ်နေပါသည်..."):
+                try:
+                    extracted_audio = extract_compressed_audio(video_temp_path)
+                    groq_client = Groq(api_key=groq_key.strip())
+                    with open(extracted_audio, "rb") as f:
+                        trans = groq_client.audio.transcriptions.create(
+                            file=(extracted_audio, f.read()),
+                            model="whisper-large-v3-turbo",
+                            response_format="verbose_json"
+                        )
+                    raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
+                    segs = merge_close_whisper_segments(raw_segs)
+                    gemini_client = genai.Client(api_key=gemini_key.strip())
+                    translate_segments_recap_style(gemini_client, groq_client, gemini_model, segs, style_mode)
+                    st.session_state["script_segments"] = segs
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Script ထုတ်ရာတွင် Error ဖြစ်ပွားပါသည်: {e}")
+
+    segs_list = st.session_state.get("script_segments", [])
+    if segs_list:
+        h_c1, h_c2 = st.columns([1.4, 1])
+        h_c1.caption(f"စာကြောင်း {len(segs_list)} | ပြင်ချင်တာ ပြင်နိုင်ပါတယ်")
+        if h_c2.button("＋ စာကြောင်းထည့်", use_container_width=True):
+            last_end = segs_list[-1]["end"] if segs_list else 0.0
+            segs_list.append({"start": last_end, "end": last_end + 3.0, "text": "", "translated": "စာကြောင်းအသစ်"})
+            st.session_state["script_segments"] = segs_list
+            st.rerun()
+
+        with st.expander("📝 စာကြောင်းများ ကြည့်ရန် / ပြင်ဆင်ရန် (နှိပ်၍ဖွင့်ပါ)", expanded=True):
+            to_delete = None
+            for idx, seg in enumerate(segs_list):
+                t_label = f"{format_mm_ss(seg['start'])} - {format_mm_ss(seg['end'])}"
+                r_c1, r_c2 = st.columns([5, 1])
+                new_txt = r_c1.text_area(
+                    t_label,
+                    value=seg["translated"],
+                    height=68,
+                    key=f"seg_edit_{idx}"
                 )
-            raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
-            segments = merge_close_whisper_segments(raw_segs)
+                st.session_state["script_segments"][idx]["translated"] = new_txt
+                if r_c2.button("🗑️", key=f"del_seg_{idx}"):
+                    to_delete = idx
+            if to_delete is not None:
+                st.session_state["script_segments"].pop(to_delete)
+                st.rerun()
 
-            status.write(f"🤖 ၂/၄ - `{gemini_model}` ဖြင့် စာကြောင်း ({len(segments)}) ကြောင်း ဘာသာပြန်နေပါသည်...")
-            gemini_client = genai.Client(api_key=gemini_key.strip())
-            translate_segments_with_fallback(
-                gemini_client=gemini_client,
-                groq_client=groq_client,
-                preferred_model=gemini_model,
-                segments=segments,
-                target_lang=target_lang,
-                status_box=status
-            )
+# ==================== CARD 2: VOICEOVER အသံရွေးပါ ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-header">
+        <div class="step-circle">2</div>
+        <div class="step-title">Voiceover အသံရွေးပါ</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-            status.write("🗣️ ၃/၄ - Edge-TTS အသံနှင့် မြန်မာစာတန်းထိုးများ တည်ဆောက်နေပါသည်...")
-            safe_speed = max(-99, min(100, int(speed_pct)))
-            tts_res = asyncio.run(synthesize_all_tts(segments, VOICES[voice_label], f"{safe_speed:+d}%", f"{int(pitch_hz):+d}Hz"))
-            for idx, wav_p, tdur in tts_res:
-                segments[idx]["wav"] = wav_p
-                segments[idx]["tts_dur"] = tdur
+    selected_voice_preset = st.radio("အသံအမျိုးအစား (၆ မျိုး)", list(VOICE_PRESETS.keys()), index=4)
+    v_cfg = VOICE_PRESETS[selected_voice_preset]
 
-            timeline, cursor = [], 0.0
-            for seg in segments:
-                s_start = max(cursor, seg["start"])
-                s_end = max(s_start + 0.1, seg["end"])
-                if s_start - cursor > 0.08:
-                    timeline.append({"type": "gap", "v_start": cursor, "v_end": s_start, "target_dur": s_start - cursor})
-                timeline.append({
-                    "type": "speech", "v_start": s_start, "v_end": s_end,
-                    "target_dur": max(0.25, seg["tts_dur"]), "wav": seg["wav"], "text": seg["translated"]
-                })
-                cursor = s_end
-            if vid_dur - cursor > 0.08:
-                timeline.append({"type": "gap", "v_start": cursor, "v_end": vid_dur, "target_dur": vid_dur - cursor})
+    with st.expander("🎛️ TTS Speed နှင့် Pitch အသေးစိတ် ထပ်ချိန်ရန်", expanded=False):
+        extra_speed = st.slider("အသံ အမြန်/အနှေး (%)", -50, 80, v_cfg["rate"], 5)
+        extra_pitch = st.slider("အသံ အမြင့်/အနိမ့် (Hz)", -30, 30, v_cfg["pitch"], 2)
 
-            srt_blocks, sub_overlays, srt_counter, new_time_cursor = [], [], 1, 0.0
-            audio_list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt").name
-            with open(audio_list_file, "w", encoding="utf-8") as af:
-                for item in timeline:
-                    dur = item["target_dur"]
-                    if item["type"] == "gap":
-                        sil = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-                        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{dur:.3f}", sil], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                        af.write(f"file '{sil}'\n")
-                    else:
-                        af.write(f"file '{item['wav']}'\n")
-                        short_lines = split_into_short_lines(item["text"], int(max_chars))
-                        tot_c = sum(len(c) for c in short_lines) or 1
-                        loc_c = 0.0
-                        for c_idx, c_str in enumerate(short_lines):
-                            c_dur = dur * (len(c_str) / tot_c) if c_idx < len(short_lines) - 1 else (dur - loc_c)
-                            st_time = new_time_cursor + loc_c
-                            et_time = st_time + c_dur
-                            srt_blocks.append(f"{srt_counter}\n{format_srt_time(st_time)} --> {format_srt_time(et_time)}\n{c_str}\n")
-                            srt_counter += 1
-                            sub_rgba = render_myanmar_subtitle_rgba(
-                                c_str, active_font_path, int(font_size), int(round(outline_w)), vid_w,
-                                sub_text_color, sub_outline_color
-                            )
-                            sub_overlays.append({"img": sub_rgba, "start": st_time, "end": et_time})
-                            loc_c += c_dur
-                    new_time_cursor += dur
-
-            srt_content = "\n".join(srt_blocks)
-            combined_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-            final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-            subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", audio_list_file, "-c", "copy", combined_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            subprocess.run([
-                "ffmpeg", "-y", "-i", combined_wav,
-                "-af", f"loudnorm=I=-14:TP=-1.0:LRA=11,volume={int(vol_boost)}dB",
-                "-ar", "44100", "-b:a", "192k", final_audio
-            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-
-            status.write(f"🎞️ ၄/၄ - Video ({vid_w}x{vid_h}) နှင့် စာတန်းထိုးများ ပေါင်းစပ်နေပါသည်...")
-            p_bar = st.progress(0.0)
-
-            scale_rx = vid_w / float(orig_w)
-            scale_ry = vid_h / float(orig_h)
-            norm_box = (
-                min(max(0, int(drag_box_coords[0] * scale_rx)), vid_w - 16),
-                min(max(0, int(drag_box_coords[1] * scale_ry)), vid_h - 16),
-                max(16, min(vid_w, int(drag_box_coords[2] * scale_rx))),
-                max(16, min(vid_h, int(drag_box_coords[3] * scale_ry)))
-            )
-
-            out_video_path = render_smooth_final_video(
-                video_path=video_temp_path,
-                audio_path=final_audio,
-                timeline=timeline,
-                sub_overlays=sub_overlays,
-                vid_w=vid_w,
-                vid_h=vid_h,
-                vid_fps=vid_fps,
-                enable_blur=enable_blur,
-                blur_box_norm=norm_box,
-                blur_power=blur_power,
-                progress_bar=p_bar
-            )
-
-            with open(out_video_path, "rb") as vf:
-                st.session_state["final_video_bytes"] = vf.read()
-            st.session_state["final_srt_content"] = srt_content
-            st.session_state["final_res_label"] = f"{vid_w}x{vid_h}"
-
-            status.update(label=f"✅ အောင်မြင်စွာ ပြီးဆုံးပါပြီ! ({vid_w}x{vid_h})", state="complete", expanded=False)
-
-        except Exception as e:
-            status.update(label="❌ Error ဖြစ်ပွားပါသည်", state="error")
-            st.error(f"Error အသေးစိတ်: {e}")
-
-if "final_video_bytes" in st.session_state and st.session_state["final_video_bytes"]:
-    st.markdown(f"#### 🎬 Final Video ({st.session_state.get('final_res_label', '')})")
-    st.video(st.session_state["final_video_bytes"], format="video/mp4")
-    d1, d2 = st.columns(2)
-    d1.download_button(
-        "📥 Video Download ဆွဲရန်",
-        data=st.session_state["final_video_bytes"],
-        file_name="myanmar_dubbed_video.mp4",
-        mime="video/mp4",
-        use_container_width=True
+    audio_offset_sec = st.slider(
+        "အသံ အစော / အနောက် ချိန် (စက္ကန့်)",
+        -2.0, 2.0, 0.0, 0.1,
+        help="အသံက ပုံထက်စောနေရင် + ဘက်၊ နောက်ကျနေရင် - ဘက် ရွှေ့ပါ။ စာတန်းလည်း လိုက်ပြောင်းပါမယ်။"
     )
-    d2.download_button(
-        "📥 SRT Download ဆွဲရန်",
-        data=st.session_state.get("final_srt_content", ""),
-        file_name="myanmar_subtitle.srt",
-        mime="text/plain",
-        use_container_width=True
-)
+
+# ==================== CARD 3: VIDEO ချိန်ညှိမှု ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-header">
+        <div class="step-circle">3</div>
+        <div class="step-title">Video ချိန်ညှိမှု</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    mirror_vid = st.toggle("ဘယ်ညာ ပြောင်းပြန်လှည့် (Mirror - Copyright ကာကွယ်ရန်)", value=False)
+    show_sub = st.toggle("မြန်မာစာတန်း video ထဲ ထည့်မယ်", value=True)
+
+    font_choice = st.selectbox("ဖောင့် ရွေးချယ်ရန်", FONT_CHOICES, index=0)
+    active_font_path = find_font_path(font_choice, custom_font_path)
+
+    color_label = st.radio("စာလုံးအရောင်", list(COLOR_PRESETS.keys()), index=2, horizontal=True)
+    sub_color_hex = COLOR_PRESETS[color_label]
+
+    sub_size_pct = st.slider("စာလုံးအရွယ် (%)", 60, 140, 90, 5)
+
+    st.divider()
+    enable_wm = st.toggle("Channel Watermark ထည့်မယ်", value=True)
+    if enable_wm:
+        wm_text = st.text_input("Channel အမည်", value="MY RECAP")
+        w_c1, w_c2 = st.columns(2)
+        wm_opacity_pct = w_c1.slider("Watermark Opacity (%)", 10, 100, 50, 5)
+        wm_size_pct = w_c2.slider("Watermark စာလုံးအရွယ် (%)", 50, 150, 95, 5)
+        w_p1, w_p2 = st.columns(2)
+        wm_x_pct = w_p1.slider("Watermark ဘယ်/ညာ (%)", 2, 98, 88, 2)
+        wm_y_pct = w_p2.slider("Watermark အပေါ်/အောက် (%)", 2, 95, 6, 2)
+    else:
+        wm_text, wm_opacity_pct, wm_size_pct, wm_x_pct, wm_y_pct = "", 50, 95, 88, 6
+
+    st.divider()
+    with st.expander("🎨 Copyright ကာကွယ်ရေး (Zoom / အလင်း / Contrast / အသံ)", expanded=False):
+        zoom_pct = st.slider("Zoom (%)", 100, 130, 100, 2)
+        brightness_val = st.slider("အလင်း (Brightness)", -0.3, 0.3, 0.0, 0.02)
+        contrast_val = st.slider("Contrast", 0.7, 1.4, 1.0, 0.05)
+        saturation_val = st.slider("အရောင် (Saturation)", 0.5, 1.5, 1.0, 0.05)
+        orig_vol_pct = st.slider("မူရင်းအသံ (%)", 0, 50, 0, 5)
+        vo_vol_pct = st.slider("Voiceover အသံ (%)", 50, 200, 120, 10)
+
+# Live Preview ပုံကို အပေါ်ဆုံး Card ထဲသို့ ပြန်ထည့်ပေးခြင်း
+if video_temp_path:
+    frame_bytes = extract_frame_bytes(video_temp_path, preview_sec, os.path.getsize(video_temp_path))
+    if frame_bytes:
+        sample_sub_txt = st.session_state["script_segments"][0]["translated"] if st.session_state.get("script_segments") else "ပြန်စရာအိမ်မရှိတော့တဲ့"
+        prev_img, norm_blur_box = generate_recapmm_preview(
+            frame_bytes=frame_bytes,
+            enable_blur=st.session_state["enable_blur"],
+            blur_y_pct=blur_y_pct,
+            blur_h_pct=blur_h_pct,
+            blur_w_pct=blur_w_pct,
+            blur_opacity_pct=blur_opacity_pct,
+            show_sub=show_sub,
+            sub_y_pct=sub_y_pct,
+            sample_text=sample_sub_txt,
+            font_path=active_font_path,
+            sub_size_pct=sub_size_pct,
+            sub_color_hex=sub_color_hex,
+            enable_wm=enable_wm,
+            wm_text=wm_text,
+            wm_x_pct=wm_x_pct,
+            wm_y_pct=wm_y_pct,
+            wm_opacity_pct=wm_opacity_pct,
+            wm_size_pct=wm_size_pct,
+            mirror_vid=mirror_vid
+        )
+        preview_placeholder.image(prev_img, use_container_width=True)
+
+# ==================== CARD 4: ထုတ်ယူမယ် ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-header">
+        <div class="step-circle">4</div>
+        <div class="step-title">ထုတ်ယူမယ်</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    render_btn = st.button("📥 Recap Video ထုတ်မယ်", type="primary", use_container_width=True)
+
+    if render_btn:
+        if not video_temp_path:
+            st.error("ကျေးဇူးပြု၍ Video ဖိုင် အရင် Upload တင်ပေးပါ။")
+        elif not groq_key or not gemini_key:
+            st.error("Groq နှင့် Gemini API Key နှစ်ခုလုံး ထည့်ပေးပါ။")
+        else:
+            status = st.status("⏳ Recap Video စတင်ထုတ်လုပ်နေပါသည်...", expanded=True)
+            try:
+                vid_w, vid_h = calculate_target_resolution(orig_w, orig_h, res_choice)
+
+                # အကယ်၍ Script မထုတ်ရသေးဘဲ တိုက်ရိုက်နှိပ်ပါက အလိုအလျောက် Script အရင်ထုတ်ပေးမည်
+                if not st.session_state.get("script_segments"):
+                    status.write("🎧 ၁/၄ - Groq Whisper + Gemini 3.5 ဖြင့် Script ထုတ်ယူနေပါသည်...")
+                    extracted_audio = extract_compressed_audio(video_temp_path)
+                    groq_client = Groq(api_key=groq_key.strip())
+                    with open(extracted_audio, "rb") as f:
+                        trans = groq_client.audio.transcriptions.create(
+                            file=(extracted_audio, f.read()),
+                            model="whisper-large-v3-turbo",
+                            response_format="verbose_json"
+                        )
+                    raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
+                    segs = merge_close_whisper_segments(raw_segs)
+                    gemini_client = genai.Client(api_key=gemini_key.strip())
+                    translate_segments_recap_style(gemini_client, groq_client, gemini_model, segs, style_mode)
+                    st.session_state["script_segments"] = segs
+
+                segments = st.session_state["script_segments"]
+
+                status.write("🗣️ ၂/၄ - Voiceover အသံများ ထုတ်ယူနေပါသည်...")
+                tts_res = asyncio.run(
+                    synthesize_all_tts(segments, v_cfg["voice"], f"{int(extra_speed):+d}%", f"{int(extra_pitch):+d}Hz")
+                )
+                for idx, wav_p, tdur in tts_res:
+                    segments[idx]["wav"] = wav_p
+                    segments[idx]["tts_dur"] = tdur
+
+                status.write("📝 ၃/၄ - မြန်မာစာတန်းထိုးနှင့် အသံ Timing ချိန်ညှိနေပါသည်...")
+                timeline, cursor = [], 0.0
+                for seg in segments:
+                    s_start = max(cursor, seg["start"] + audio_offset_sec)
+                    s_end = max(s_start + 0.1, seg["end"] + audio_offset_sec)
+                    if s_start - cursor > 0.08:
+                        timeline.append({"type": "gap", "v_start": cursor, "v_end": s_start, "target_dur": s_start - cursor})
+                    timeline.append({
+                        "type": "speech", "v_start": s_start, "v_end": s_end,
+                        "target_dur": max(0.25, seg["tts_dur"]), "wav": seg["wav"], "text": seg["translated"]
+                    })
+                    cursor = s_end
+                if vid_dur - cursor > 0.08:
+                    timeline.append({"type": "gap", "v_start": cursor, "v_end": vid_dur, "target_dur": vid_dur - cursor})
+
+                srt_blocks, sub_overlays, srt_counter, new_time_cursor = [], [], 1, 0.0
+                audio_list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt").name
+                with open(audio_list_file, "w", encoding="utf-8") as af:
+                    for item in timeline:
+                        dur = item["target_dur"]
+                        if item["type"] == "gap":
+                            sil = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                            subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{dur:.3f}", sil], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            af.write(f"file '{sil}'\n")
+                        else:
+                            af.write(f"file '{item['wav']}'\n")
+                            short_lines = split_into_short_lines(item["text"], 22)
+                            tot_c = sum(len(c) for c in short_lines) or 1
+                            loc_c = 0.0
+                            for c_idx, c_str in enumerate(short_lines):
+                                c_dur = dur * (len(c_str) / tot_c) if c_idx < len(short_lines) - 1 else (dur - loc_c)
+                                st_time = new_time_cursor + loc_c
+                                et_time = st_time + c_dur
+                                srt_blocks.append(f"{srt_counter}\n{format_srt_time(st_time)} --> {format_srt_time(et_time)}\n{c_str}\n")
+                                srt_counter += 1
+                                sub_rgba = render_myanmar_subtitle_rgba(
+                                    c_str, active_font_path, int(sub_size_pct), vid_w, sub_color_hex, pill_bg=True
+                                )
+                                sub_overlays.append({"img": sub_rgba, "start": st_time, "end": et_time})
+                                loc_c += c_dur
+                        new_time_cursor += dur
+
+                srt_content = "\n".join(srt_blocks)
+                combined_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+                subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", audio_list_file, "-c", "copy", combined_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", combined_wav,
+                    "-af", "loudnorm=I=-14:TP=-1.0:LRA=11,volume=5dB",
+                    "-ar", "44100", "-b:a", "128k", final_audio
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+                status.write(f"🎞️ ၄/၄ - HD Video ({vid_w}x{vid_h}) ကို MB ဖိုင်ဆိုဒ်အနည်းဆုံးဖြင့် ပေါင်းစပ်နေပါသည်...")
+                p_bar = st.progress(0.0)
+
+                bx_w = max(16, int(vid_w * (blur_w_pct / 100.0)))
+                bx_h = max(16, int(vid_h * (blur_h_pct / 100.0)))
+                bx_x = (vid_w - bx_w) // 2
+                bx_y = min(max(0, int(vid_h * (blur_y_pct / 100.0))), vid_h - bx_h)
+
+                wm_rgba = render_watermark_rgba(wm_text, active_font_path, wm_opacity_pct, wm_size_pct, vid_w) if enable_wm else None
+
+                out_video_path = render_recapmm_final_video(
+                    video_path=video_temp_path,
+                    tts_audio_path=final_audio,
+                    timeline=timeline,
+                    sub_overlays=sub_overlays,
+                    vid_w=vid_w,
+                    vid_h=vid_h,
+                    vid_fps=vid_fps,
+                    enable_blur=st.session_state["enable_blur"],
+                    blur_box_norm=(bx_x, bx_y, bx_w, bx_h),
+                    blur_opacity_pct=blur_opacity_pct,
+                    show_sub=show_sub,
+                    sub_y_pct=sub_y_pct,
+                    wm_rgba=wm_rgba,
+                    wm_x_pct=wm_x_pct,
+                    wm_y_pct=wm_y_pct,
+                    mirror_vid=mirror_vid,
+                    zoom_pct=zoom_pct,
+                    brightness_val=brightness_val,
+                    contrast_val=contrast_val,
+                    saturation_val=saturation_val,
+                    orig_vol_pct=orig_vol_pct,
+                    vo_vol_pct=vo_vol_pct,
+                    progress_bar=p_bar
+                )
+
+                with open(out_video_path, "rb") as vf:
+                    v_bytes = vf.read()
+                st.session_state["final_video_bytes"] = v_bytes
+                st.session_state["final_srt_content"] = srt_content
+                st.session_state["final_mb_size"] = len(v_bytes) / (1024 * 1024)
+
+                status.update(label="✅ Recap Video အောင်မြင်စွာ ထုတ်ပြီးပါပြီ!", state="complete", expanded=False)
+
+            except Exception as e:
+                status.update(label="❌ Error ဖြစ်ပွားပါသည်", state="error")
+                st.error(f"Error အသေးစိတ်: {e}")
+
+    if "final_srt_content" in st.session_state and st.session_state["final_srt_content"]:
+        st.download_button(
+            "📄 မြန်မာ SRT Download",
+            data=st.session_state["final_srt_content"],
+            file_name="recap_myanmar.srt",
+            mime="text/plain",
+            use_container_width=True
+        )
+
+    if "final_video_bytes" in st.session_state and st.session_state["final_video_bytes"]:
+        mb_val = st.session_state.get("final_mb_size", 0.0)
+        st.video(st.session_state["final_video_bytes"], format="video/mp4")
+        st.download_button(
+            f"📥 MP4 Download ({mb_val:.1f} MB)",
+            data=st.session_state["final_video_bytes"],
+            file_name="RecapMM_Video.mp4",
+            mime="video/mp4",
+            use_container_width=True
+    )
