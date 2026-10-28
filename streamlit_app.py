@@ -8,7 +8,6 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Streamlit ရဲ့ အပေါ်အောက်ဘောင်များကို ဖျောက်ပြီး မျက်နှာပြင်အပြည့် (100dvh) ထားရှိခြင်း
 st.markdown("""
 <style>
     header[data-testid="stHeader"], footer, #MainMenu, div[data-testid="stDecoration"] {
@@ -43,7 +42,6 @@ st.markdown("""
 default_groq = st.secrets.get("GROQ_API_KEY", "") if "GROQ_API_KEY" in st.secrets else ""
 default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
 
-# Raw String (r"""...""") သုံးထားသဖြင့် JavaScript Regex နှင့် Escape စာလုံးများ လုံးဝ မပျက်စီးတော့ပါ
 APP_HTML = r"""
 <!DOCTYPE html>
 <html lang="my">
@@ -87,7 +85,6 @@ APP_HTML = r"""
         margin: 0 auto;
         background: var(--bg-main);
     }
-    /* ==================== ၁။ အပေါ်ပိုင်း FIXED 9:16 VIDEO PANE ==================== */
     .fixed-video-pane {
         flex: 0 0 auto;
         background: #FFFFFF;
@@ -216,8 +213,6 @@ APP_HTML = r"""
         min-width: 72px;
         text-align: right;
     }
-
-    /* ==================== ၂။ အောက်ပိုင်း SCROLLABLE TOOLS PANE ==================== */
     .scrollable-tools-pane {
         flex: 1 1 auto;
         overflow-y: auto;
@@ -1302,7 +1297,7 @@ function pickSubColor(clr, el) {
     el.innerText = '✓';
 }
 
-// ==================== STEP 1: WHISPER + GEMINI VISION + AUTO WAIT & RETRY ====================
+// ==================== STEP 1: SAFE FETCH + ULTRA-LIGHT 8-BIT WAV + GEMINI VISION ====================
 async function sleepWithCountdown(seconds, titlePrefix, updateProg, currentPct) {
     for (let s = seconds; s > 0; s--) {
         updateProg(currentPct, titlePrefix, `⏳ API Limit ခေတ္တပြည့်သွားသဖြင့် (${s}) စက္ကန့် စောင့်ဆိုင်းပြီး ပြန်ခေါ်နေပါသည်...`);
@@ -1310,7 +1305,20 @@ async function sleepWithCountdown(seconds, titlePrefix, updateProg, currentPct) 
     }
 }
 
-// Gemini က Video ကို ကြည့်နိုင်ရန် ဇာတ်ဝင်ခန်းပုံ (၄) ပုံ ဆွဲထုတ်ခြင်း
+// HTML Error ("<!-- Copy...") ပြန်ပို့လာပါက မပျက်စီးအောင် စစ်ဆေးဖတ်ယူသည့် Safe JSON Reader
+async function safeReadJsonResponse(resp, apiLabel) {
+    const rawTxt = await resp.text();
+    const trimmed = rawTxt.trim();
+    if (trimmed.startsWith('<') || trimmed.startsWith('<!--')) {
+        throw new Error(`ISP_HTML_BLOCK:${apiLabel} ကို ဖုန်းအင်တာနက်လိုင်းက ပိတ်ဆို့ထားပါသည် (HTML returned)။ ကျေးဇူးပြု၍ ဖုန်းတွင် VPN ဖွင့်ပြီး ပြန်နှိပ်ပေးပါ။`);
+    }
+    try {
+        return JSON.parse(trimmed);
+    } catch (e) {
+        throw new Error(`${apiLabel} JSON Error: ${trimmed.slice(0, 80)}`);
+    }
+}
+
 async function captureCompactKeyframesBase64(vidEl, count = 4) {
     const frames = [];
     const origTime = vidEl.currentTime;
@@ -1336,7 +1344,8 @@ async function captureCompactKeyframesBase64(vidEl, count = 4) {
     return frames;
 }
 
-async function extractFastAudioBlob(file) {
+// 8-bit 8000Hz Mono WAV (၄ မိနစ်စာ ဗီဒီယိုကို 1.8 MB အောက်သာ ရှိစေသဖြင့် မည်သည့်ဖုန်းလိုင်းမဆို ချက်ချင်းပို့နိုင်သည်)
+async function extractUltraLightAudioBlob(file) {
     const arrayBuf = await file.arrayBuffer();
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const decoded = await audioCtx.decodeAudioData(arrayBuf);
@@ -1349,36 +1358,31 @@ async function extractFastAudioBlob(file) {
     const rendered = await offlineCtx.startRendering();
     const pcm = rendered.getChannelData(0);
 
-    const wavBuf = new ArrayBuffer(44 + pcm.length * 2);
+    const wavBuf = new ArrayBuffer(44 + pcm.length);
     const view = new DataView(wavBuf);
     const writeStr = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-    writeStr(0, 'RIFF'); view.setUint32(4, 36 + pcm.length * 2, true); writeStr(8, 'WAVE');
+    writeStr(0, 'RIFF'); view.setUint32(4, 36 + pcm.length, true); writeStr(8, 'WAVE');
     writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-    view.setUint16(32, 2, true); view.setUint16(34, 16, true); writeStr(36, 'data');
-    view.setUint32(40, pcm.length * 2, true);
-    let offset = 44;
-    for (let i = 0; i < pcm.length; i++, offset += 2) {
+    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate, true);
+    view.setUint16(32, 1, true); view.setUint16(34, 8, true); writeStr(36, 'data');
+    view.setUint32(40, pcm.length, true);
+    for (let i = 0; i < pcm.length; i++) {
         let s = Math.max(-1, Math.min(1, pcm[i]));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        view.setUint8(44 + i, Math.floor((s + 1.0) * 127.5));
     }
     return new Blob([wavBuf], { type: 'audio/wav' });
 }
 
-// ဘယ်လို JSON သို့မဟုတ် Text ပုံစံနဲ့ ပြန်ပို့ပို့ ၁၀၀% ဖတ်နိုင်သော Universal Parser
 function universalParseTranslations(rawText, expectedCount) {
     if (!rawText) return null;
     const map = {};
-
-    // ၁။ JSON Array သို့မဟုတ် Object အဖြစ် အရင်ဖတ်ကြည့်ခြင်း
     try {
         const cleanJsonStr = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
         const parsed = JSON.parse(cleanJsonStr);
         if (Array.isArray(parsed)) {
             parsed.forEach((item, idx) => {
-                if (typeof item === 'string') {
-                    map[idx] = cleanMyanmarText(item);
-                } else if (item && typeof item === 'object') {
+                if (typeof item === 'string') map[idx] = cleanMyanmarText(item);
+                else if (item && typeof item === 'object') {
                     const idVal = item.id !== undefined ? parseInt(item.id, 10) : idx;
                     const txtVal = item.translation || item.burmese || item.text || Object.values(item)[0];
                     if (txtVal) map[idVal] = cleanMyanmarText(String(txtVal));
@@ -1397,11 +1401,8 @@ function universalParseTranslations(rawText, expectedCount) {
                 });
             }
         }
-    } catch (e) {
-        // JSON မဟုတ်ပါက အောက်က Line-by-Line Parser ဖြင့် ဆက်ဖတ်မည်
-    }
+    } catch (e) {}
 
-    // ၂။ အကယ်၍ Plain Text Lines ဖြစ်နေပါက တစ်ကြောင်းချင်း ဖတ်ခြင်း
     if (Object.keys(map).length < Math.max(1, Math.floor(expectedCount * 0.4))) {
         const lines = rawText.replace(/```/g, '').split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
         let seqIdx = 0;
@@ -1411,16 +1412,13 @@ function universalParseTranslations(rawText, expectedCount) {
                 const engDigits = m[1].replace(/[၀-၉]/g, d => "၀၁၂၃၄၅၆၇၈၉".indexOf(d));
                 const idx = parseInt(engDigits, 10) - 1;
                 const cleaned = cleanMyanmarText(m[2]);
-                if (idx >= 0 && idx < expectedCount && cleaned) {
-                    map[idx] = cleaned;
-                }
+                if (idx >= 0 && idx < expectedCount && cleaned) map[idx] = cleaned;
             } else if (/[\u1000-\u109F]/.test(line) && seqIdx < expectedCount) {
                 map[seqIdx] = cleanMyanmarText(line);
                 seqIdx++;
             }
         }
     }
-
     return Object.keys(map).length > 0 ? map : null;
 }
 
@@ -1442,13 +1440,10 @@ async function translateBatchWithVisionAndRetry(subSegs, keyframesB64, geminiKey
 ၃။ Return ONLY a valid JSON array of objects with keys "id" (number) and "translation" (Burmese string):
 ${JSON.stringify(payload)}`;
 
-    // တရားဝင် Gemini Models များနှင့် Groq Backup Models များ
     const geminiModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
     const groqModels = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
 
-    // အများဆုံး (၃) ပတ် အထိ စက္ကန့်စောင့်ပြီး မရမချင်း လှည့်ခေါ်ပေးမည်
     for (let round = 1; round <= 3; round++) {
-        // ၁။ Gemini Vision Models စမ်းသပ်ခြင်း
         for (let mIdx = 0; mIdx < geminiModels.length; mIdx++) {
             const modelName = geminiModels[mIdx];
             updateProg(60, `👁️ Gemini (${modelName})`, `${batchLabel} — Video ပုံရိပ်များကို ကြည့်၍ မြန်မာဘာသာပြန်နေပါသည် (အကြိမ် ${round})...`);
@@ -1470,7 +1465,7 @@ ${JSON.stringify(payload)}`;
                 });
 
                 if (gResp.ok) {
-                    const gJson = await gResp.json();
+                    const gJson = await safeReadJsonResponse(gResp, "Gemini API");
                     const candText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
                     const parsedMap = universalParseTranslations(candText, subSegs.length);
                     if (parsedMap) return parsedMap;
@@ -1482,7 +1477,6 @@ ${JSON.stringify(payload)}`;
             }
         }
 
-        // ၂။ Groq Llama-3.3-70B Backup စမ်းသပ်ခြင်း
         for (const gModel of groqModels) {
             updateProg(78, `🤖 Backup AI (${gModel})`, `${batchLabel} — ချောမွေ့သော မြန်မာစကားပြောသို့ ပြန်ဆိုနေပါသည်...`);
             try {
@@ -1501,7 +1495,7 @@ ${JSON.stringify(payload)}`;
                 });
 
                 if (bResp.ok) {
-                    const bJson = await bResp.json();
+                    const bJson = await safeReadJsonResponse(bResp, "Groq Chat API");
                     const contentTxt = bJson?.choices?.[0]?.message?.content || "";
                     const parsedMap = universalParseTranslations(contentTxt, subSegs.length);
                     if (parsedMap) return parsedMap;
@@ -1543,32 +1537,31 @@ async function step1TranslateToNaturalBurmese() {
         updateProg(12, "👁️ Video ဇာတ်ဝင်ခန်းများ ဖမ်းယူနေသည်", "Gemini က Video ကို ကြည့်ပြီး ဘာသာပြန်နိုင်ရန် ဇာတ်ဝင်ခန်းပုံ (၄) ပုံ ဆွဲထုတ်နေပါသည်...");
         const keyframesB64 = await captureCompactKeyframesBase64(video, 4);
 
-        updateProg(28, "🎧 Whisper AI ဖြင့် သေချာနားထောင်နေသည်", "Local Video ထဲမှ စကားပြောအသံနှင့် အချိန်အတိအကျကို နားထောင်နေပါသည်...");
-        const wavBlob = await extractFastAudioBlob(currentVideoFile);
+        updateProg(28, "🎧 Whisper AI ဖြင့် သေချာနားထောင်နေသည်", "Local Video ထဲမှ အသံကို ပေါ့ပါးသော 8-bit WAV အဖြစ် ချုံ့ပြီး နားထောင်နေပါသည်...");
+        const wavBlob = await extractUltraLightAudioBlob(currentVideoFile);
 
         const formData = new FormData();
         formData.append('file', wavBlob, 'audio.wav');
         formData.append('model', 'whisper-large-v3-turbo');
         formData.append('response_format', 'verbose_json');
 
-        let wResp = await fetch('[https://api.groq.com/openai/v1/audio/transcriptions](https://api.groq.com/openai/v1/audio/transcriptions)', {
-            method: 'POST',
-            headers: { 'Authorization': 'Bearer ' + groqKey },
-            body: formData
-        });
-        if (wResp.status === 429) {
-            await sleepWithCountdown(6, "⏳ Whisper Rate Limit စောင့်နေသည်", updateProg, 32);
-            wResp = await fetch('[https://api.groq.com/openai/v1/audio/transcriptions](https://api.groq.com/openai/v1/audio/transcriptions)', {
+        let wData = null;
+        for (let wTry = 1; wTry <= 3; wTry++) {
+            const wResp = await fetch('[https://api.groq.com/openai/v1/audio/transcriptions](https://api.groq.com/openai/v1/audio/transcriptions)', {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + groqKey },
                 body: formData
             });
+            if (wResp.status === 429 || wResp.status === 503) {
+                await sleepWithCountdown(6 * wTry, "⏳ Whisper Rate Limit စောင့်နေသည်", updateProg, 32);
+                continue;
+            }
+            wData = await safeReadJsonResponse(wResp, "Groq Whisper API");
+            break;
         }
-        if (!wResp.ok) throw new Error("Groq API Key မှားနေပါသည် သို့မဟုတ် အင်တာနက်လိုင်း ပြတ်တောက်နေပါသည်။");
 
-        const wData = await wResp.json();
         const rawSegs = (wData && Array.isArray(wData.segments)) ? wData.segments : [];
-        if (rawSegs.length === 0) throw new Error("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ။");
+        if (rawSegs.length === 0) throw new Error("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ (သို့မဟုတ်) API Key မှားနေပါသည်။");
 
         const mergedRaw = [];
         for (const s of rawSegs) {
@@ -1584,7 +1577,6 @@ async function step1TranslateToNaturalBurmese() {
             }
         }
 
-        // စာကြောင်း 35 ကြောင်းစီ ခွဲ၍ Gemini Vision ဖြင့် ဘာသာပြန်ခြင်း
         const batchSize = 35;
         const finalSegs = [];
 
@@ -1621,7 +1613,7 @@ async function step1TranslateToNaturalBurmese() {
         }
 
         if (finalSegs.length === 0) {
-            throw new Error("API Key မှားယွင်းနေပါသည် သို့မဟုတ် အင်တာနက်လိုင်း ပြတ်တောက်နေပါသည်။ 🔑 Keys ခလုတ်ကိုနှိပ်ပြီး Key စစ်ဆေးပေးပါ။");
+            throw new Error("ဖုန်းအင်တာနက်လိုင်းက AI Server ကို ပိတ်ထားပါသည် သို့မဟုတ် API Key မှားနေပါသည်။ ဖုန်းတွင် VPN ဖွင့်ပြီး ပြန်စမ်းပေးပါ။");
         }
 
         segments = finalSegs;
@@ -1630,7 +1622,12 @@ async function step1TranslateToNaturalBurmese() {
         previewBox.style.display = 'block';
         previewBox.innerHTML = segments.map((s, idx) => `<div style="margin-bottom:5px;"><b>${idx + 1}. [${fmtTime(s.start)} - ${fmtTime(s.end)}]</b> ${s.text}</div>`).join('');
     } catch (err) {
-        updateProg(100, "❌ Error ဖြစ်ပွားပါသည်", err.message || String(err));
+        const msg = err.message || String(err);
+        if (msg.includes("ISP_HTML_BLOCK:")) {
+            updateProg(100, "⚠️ ဖုန်းတွင် VPN ဖွင့်ပေးပါ", msg.replace("ISP_HTML_BLOCK:", ""));
+        } else {
+            updateProg(100, "❌ Error ဖြစ်ပွားပါသည်", msg);
+        }
     }
 }
 
@@ -1708,7 +1705,7 @@ async function step2GenerateBurmeseTTS() {
     updateProg(100, "✅ အဆင့် (၂) မြန်မာ TTS အသံနှင့် Smart Sync အသင့်ဖြစ်ပါပြီ!", "အပေါ်က Video ကို Play နှိပ်နားထောင်နိုင်သလို အောက်ဆုံးက အဆင့် (၄) တွင် Video ထုတ်ယူနိုင်ပါပြီ။");
 }
 
-// ==================== SMART SYNC PLAYBACK ENGINE (ORIGINAL VIDEO AUDIO ALWAYS 0%) ====================
+// ==================== SMART SYNC PLAYBACK ENGINE ====================
 let lastPlayedSegIdx = -1;
 function syncSmartVideoAndVoice(curTime) {
     if (video.paused) return;
