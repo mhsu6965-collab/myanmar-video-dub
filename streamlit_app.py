@@ -1,1426 +1,1086 @@
+import os
+import re
+import json
+import time
+import asyncio
+import subprocess
+import tempfile
+from io import BytesIO
+from PIL import Image, ImageDraw, ImageFont
 import streamlit as st
 import streamlit.components.v1 as components
+from groq import Groq
+from google import genai
+from google.genai import types
+import edge_tts
 
 st.set_page_config(
-    page_title="Studio99 & RecapMM Local Studio",
+    page_title="RecapMM • Studio99",
     page_icon="🎬",
-    layout="wide",
+    layout="centered",
     initial_sidebar_state="collapsed"
 )
 
-# Streamlit ရဲ့ အပေါ်အောက်ဘောင်များကို ဖျောက်ပြီး Iframe ကို ဖုန်းမျက်နှာပြင်အပြည့် (100dvh) ချိတ်ဆက်ခြင်း
+# ==================== CLEAN LIGHT UI & NO EXTRA BORDERS ====================
 st.markdown("""
 <style>
     header[data-testid="stHeader"], footer, #MainMenu, div[data-testid="stDecoration"] {
         display: none !important;
     }
-    html, body, .stApp {
+    .stApp {
         background-color: #F1F5F9 !important;
-        margin: 0 !important;
-        padding: 0 !important;
-        height: 100dvh !important;
-        overflow: hidden !important;
+        color: #0F172A !important;
     }
     .block-container {
-        padding: 0 !important;
-        margin: 0 !important;
-        max-width: 100% !important;
-        height: 100dvh !important;
+        padding-top: 0.6rem !important;
+        padding-bottom: 3rem !important;
+        padding-left: 0.7rem !important;
+        padding-right: 0.7rem !important;
+        max-width: 480px !important;
     }
-    div[data-testid="stVerticalBlock"] {
-        gap: 0 !important;
-        height: 100dvh !important;
+    p, span, label, div[data-testid="stMarkdownContainer"] p {
+        color: #1E293B !important;
     }
-    iframe {
-        border: none !important;
-        width: 100vw !important;
-        height: 100dvh !important;
-        display: block !important;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-default_groq = st.secrets.get("GROQ_API_KEY", "") if "GROQ_API_KEY" in st.secrets else ""
-default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
-
-APP_HTML = f"""
-<!DOCTYPE html>
-<html lang="my">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@400;600;700;800&family=Noto+Serif+Myanmar:wght@700&family=Padauk:wght@700&display=swap" rel="stylesheet">
-<style>
-    :root {{
-        --bg-main: #F1F5F9;
-        --bg-card: #FFFFFF;
-        --text-dark: #0F172A;
-        --text-muted: #475569;
-        --border-clr: #CBD5E1;
-        --accent-orange: #EA580C;
-        --accent-blue: #0284C7;
-    }}
-    * {{
-        box-sizing: border-box;
-        -webkit-tap-highlight-color: transparent;
-    }}
-    html, body {{
-        margin: 0;
-        padding: 0;
-        width: 100%;
-        height: 100dvh;
-        background-color: var(--bg-main);
-        font-family: 'Noto Sans Myanmar', sans-serif;
-        color: var(--text-dark);
-        overflow: hidden;
-    }}
-    /* မျက်နှာပြင်ကို အပေါ် (Fixed Video) နှင့် အောက် (Scrollable Tools) နှစ်ပိုင်းခွဲသည့် Layout */
-    .split-layout {{
-        display: flex;
-        flex-direction: column;
-        width: 100%;
-        max-width: 500px;
-        height: 100dvh;
-        margin: 0 auto;
-        background: var(--bg-main);
-    }}
-    /* ၁။ အပေါ်ပိုင်း FIXED VIDEO HEADER (လုံးဝ မရွေ့ပါ) */
-    .fixed-video-pane {{
-        flex: 0 0 auto;
-        background: #FFFFFF;
-        border-bottom: 2px solid #CBD5E1;
-        padding: 8px 10px 10px 10px;
-        z-index: 100;
-        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
-    }}
-    .topbar-compact {{
+    .topbar {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 6px;
-    }}
-    .brand-logo {{
-        font-size: 1.05rem;
-        font-weight: 800;
-        color: #EA580C;
-    }}
-    .brand-logo span {{
-        color: #0F172A;
-    }}
-    .top-right-btns {{
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }}
-    .mini-gallery-btn {{
         background: #0F172A;
         color: #FFFFFF;
-        border: 1.5px solid #14B8A6;
-        padding: 5px 10px;
-        border-radius: 8px;
-        font-size: 0.78rem;
-        font-weight: 700;
-        cursor: pointer;
-        display: inline-flex;
-        align-items: center;
-        gap: 4px;
-    }}
-    .key-btn {{
-        background: #F1F5F9;
-        color: #0F172A;
-        border: 1px solid #CBD5E1;
-        border-radius: 8px;
-        padding: 5px 8px;
-        font-size: 0.78rem;
-        font-weight: 700;
-        cursor: pointer;
-    }}
-    .canvas-stage {{
-        position: relative;
-        width: 100%;
-        height: 235px;
-        background: #090D16;
-        border-radius: 12px;
-        overflow: hidden;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border: 1px solid #334155;
-        touch-action: none;
-    }}
-    canvas {{
-        max-width: 100%;
-        max-height: 100%;
-        display: block;
-        touch-action: none;
-    }}
-    .player-bar {{
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-top: 6px;
-        padding: 4px 8px;
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 10px;
-    }}
-    .play-Pause-btn {{
-        background: var(--accent-orange);
-        color: #FFFFFF;
-        border: none;
-        border-radius: 6px;
-        width: 32px;
-        height: 28px;
-        font-size: 0.9rem;
-        font-weight: bold;
-        cursor: pointer;
-    }}
-    .seek-bar {{
-        flex: 1;
-        accent-color: var(--accent-orange);
-        height: 5px;
-    }}
-    .time-label {{
-        font-size: 0.74rem;
-        font-weight: 700;
-        color: var(--text-muted);
-        min-width: 68px;
-        text-align: right;
-    }}
-
-    /* ၂။ အောက်ပိုင်း SCROLLABLE TOOLS PANE (အောက်ဆုံးအထိ လွတ်လပ်စွာ ဆွဲနိုင်သည်) */
-    .scrollable-tools-pane {{
-        flex: 1 1 auto;
-        overflow-y: auto;
-        -webkit-overflow-scrolling: touch;
-        padding: 12px 10px 90px 10px;
-    }}
-    .card {{
-        background: var(--bg-card);
-        border: 1px solid var(--border-clr);
-        border-radius: 16px;
-        padding: 14px;
-        margin-bottom: 12px;
-        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04);
-    }}
-    .step-head {{
-        display: flex;
-        align-items: center;
-        gap: 8px;
+        padding: 10px 14px;
+        border-radius: 14px;
         margin-bottom: 10px;
-    }}
-    .step-num {{
+        box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+    }
+    .brand-logo {
+        font-size: 1.15rem;
+        font-weight: 800;
+        color: #F97316 !important;
+    }
+    .brand-logo span {
+        color: #FFFFFF !important;
+    }
+    .badge-916 {
+        background: rgba(56, 189, 248, 0.18);
+        color: #38BDF8 !important;
+        padding: 4px 10px;
+        border-radius: 8px;
+        font-size: 0.76rem;
+        font-weight: 700;
+    }
+    div[data-testid="stVerticalBlockBorderWrapper"] {
+        background-color: #FFFFFF !important;
+        border: 1px solid #CBD5E1 !important;
+        border-radius: 16px !important;
+        padding: 0.9rem !important;
+        margin-bottom: 0.8rem !important;
+        box-shadow: 0 2px 8px rgba(15, 23, 42, 0.04) !important;
+    }
+    .step-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+    }
+    .step-num {
         width: 26px;
         height: 26px;
         border-radius: 50%;
-        background: var(--accent-orange);
-        color: #FFFFFF;
+        background: #EA580C;
+        color: #FFFFFF !important;
         font-weight: 800;
         font-size: 0.85rem;
         display: inline-flex;
         align-items: center;
         justify-content: center;
-    }}
-    .step-title {{
+    }
+    .step-title {
         font-size: 1rem;
         font-weight: 800;
-        color: var(--text-dark);
-    }}
-    /* BLUR MASK TOGGLES */
-    .blur-item {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 9px 12px;
-        background: #F8FAFC;
-        border: 1px solid #E2E8F0;
-        border-radius: 12px;
-        margin-bottom: 8px;
-    }}
-    .switch {{
+        color: #0F172A !important;
+    }
+    div.stButton > button[kind="primary"] {
+        background: linear-gradient(90deg, #EA580C 0%, #F97316 100%) !important;
+        color: #FFFFFF !important;
+        font-weight: 800 !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 0.7rem 1rem !important;
+        box-shadow: 0 4px 12px rgba(234, 88, 12, 0.25) !important;
+    }
+    div.stButton > button[kind="primary"] p {
+        color: #FFFFFF !important;
+    }
+    div.stDownloadButton > button {
+        background: linear-gradient(90deg, #059669 0%, #10B981 100%) !important;
+        color: #FFFFFF !important;
+        font-weight: 800 !important;
+        border: none !important;
+        border-radius: 12px !important;
+        padding: 0.7rem 1rem !important;
+    }
+    div.stDownloadButton > button p {
+        color: #FFFFFF !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+USER_FONT_DIR = os.path.expanduser("~/.local/share/fonts")
+os.makedirs(USER_FONT_DIR, exist_ok=True)
+
+VOICE_PRESETS = {
+    "မိန်းကလေး ၁ - တည်ငြိမ်": {"voice": "my-MM-NilarNeural", "rate": 0, "pitch": -2},
+    "မိန်းကလေး ၂ - ပေါ့ပါး": {"voice": "my-MM-NilarNeural", "rate": 8, "pitch": 2},
+    "မိန်းကလေး ၃ - နုပျို": {"voice": "my-MM-NilarNeural", "rate": 4, "pitch": 6},
+    "ယောက်ျား ၁ - တက်ကြွ": {"voice": "my-MM-ThihaNeural", "rate": 10, "pitch": 2},
+    "ယောက်ျား ၂ - လေးနက်": {"voice": "my-MM-ThihaNeural", "rate": 0, "pitch": -4},
+    "ယောက်ျား ၃ - စိတ်လှုပ်ရှား": {"voice": "my-MM-ThihaNeural", "rate": 14, "pitch": 4}
+}
+
+NARRATION_STYLES = {
+    "Direct Translation (မူရင်း POV အတိုင်း ဘာသာပြန်မယ်)": "direct",
+    "Third Person (ပြင်ပဇာတ်ကြောင်းပြောသူအနေနဲ့ ပြောမယ်)": "third_person",
+    "First Person (အဓိကဇာတ်ကောင် ကိုယ်တိုင်ပြောသလို ပြောမယ်)": "first_person"
+}
+
+COLOR_PRESETS = {
+    "🔵 အပြာနု": "#38BDF8",
+    "🟡 အဝါ": "#FFE600",
+    "⚪ အဖြူ": "#FFFFFF",
+    "🌸 ပန်းရောင်": "#F472B6"
+}
+
+FONT_CHOICES = [
+    "Noto Sans (မင်္ဂလာပါ)",
+    "Padauk (မင်္ဂလာပါ)",
+    "AJ 02 / Custom (.ttf)"
+]
+
+def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
+    hex_color = hex_color.lstrip("#")
+    if len(hex_color) == 6:
+        return (int(hex_color[0:2], 16), int(hex_color[2:4], 16), int(hex_color[4:6], 16), alpha)
+    return (255, 255, 255, alpha)
+
+def clean_text_for_myanmar_font(text: str) -> str:
+    """လေးထောင့်ကွက် (Tofu □) လုံးဝမပေါ်စေရန် သန့်စင်ခြင်း"""
+    if not text:
+        return ""
+    text = re.sub(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u202a-\u202e\u2060-\u206f]", "", text)
+    replacements = {
+        "“": "", "”": "", "‘": "", "’": "", "\"": "", "'": "",
+        "—": " ", "–": " ", "…": "", "•": "", "*": "", "#": "",
+        "~": "", "`": "", "^": "", "|": "", "<": "", ">": ""
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    eng_to_mm_digits = str.maketrans("0123456789", "၀၁၂၃၄၅၆၇၈၉")
+    text = text.translate(eng_to_mm_digits)
+    text = re.sub(r"[^\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FFa-zA-Z\s,\.\!\?\(\)\-\+/\:]", "", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+def register_uploaded_font(uploaded_file) -> str:
+    if uploaded_file is None:
+        return None
+    dest_path = os.path.join(USER_FONT_DIR, uploaded_file.name)
+    with open(dest_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    subprocess.run(["fc-cache", "-f", USER_FONT_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return dest_path
+
+def find_font_path(font_choice: str, custom_font_path: str = None) -> str:
+    if custom_font_path and os.path.exists(custom_font_path):
+        return custom_font_path
+    if "Padauk" in font_choice:
+        res = subprocess.run(["fc-match", "-f", "%{file}", "Padauk"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if res.stdout.strip() and os.path.exists(res.stdout.strip()):
+            return res.stdout.strip()
+    res = subprocess.run(["fc-match", "-f", "%{file}", "Noto Sans Myanmar"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    fpath = res.stdout.strip()
+    if fpath and os.path.exists(fpath):
+        return fpath
+    return "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Bold.ttf"
+
+def align_to_8(val: int) -> int:
+    return max(16, int(round(val / 8.0)) * 8)
+
+def get_video_info(file_path: str):
+    cmd = [
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height,r_frame_rate:stream_tags=rotate:format=duration",
+        "-of", "json", file_path
+    ]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        data = json.loads(res.stdout)
+        stream = data["streams"][0]
+        w, h = int(stream["width"]), int(stream["height"])
+        rot = int(stream.get("tags", {}).get("rotate", 0))
+        if rot in (90, 270, -90, -270):
+            w, h = h, w
+        fps_parts = stream.get("r_frame_rate", "30/1").split("/")
+        fps = float(fps_parts[0]) / float(fps_parts[1]) if len(fps_parts) == 2 and float(fps_parts[1]) != 0 else 30.0
+        fps = min(30.0, max(15.0, fps))
+        dur = float(data["format"]["duration"])
+        return align_to_8(w), align_to_8(h), fps, dur
+    except Exception:
+        return 720, 1280, 30.0, 0.0
+
+def get_media_duration(file_path: str) -> float:
+    cmd = ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", file_path]
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    try:
+        return float(res.stdout.strip())
+    except Exception:
+        return 0.0
+
+def format_srt_time(seconds: float) -> str:
+    seconds = max(0.0, seconds)
+    hrs = int(seconds // 3600)
+    mins = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    msecs = int(round((seconds - int(seconds)) * 1000))
+    if msecs >= 1000:
+        secs += 1
+        msecs -= 1000
+    return f"{hrs:02d}:{mins:02d}:{secs:02d},{msecs:03d}"
+
+def extract_compressed_audio(video_path: str) -> str:
+    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+    subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", temp_audio], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    return temp_audio
+
+def split_into_short_lines(text: str, max_chars: int = 18) -> list:
+    """9:16 ဗီဒီယိုဘောင်အပြင်သို့ စာသားလုံးဝမထွက်စေရန် စာကြောင်းတိုလေးများ ဖြတ်တောက်ခြင်း"""
+    text = clean_text_for_myanmar_font(text)
+    if not text:
+        return []
+    if len(text) <= max_chars:
+        return [text]
+    tokens = re.split(r"(?<=[၊။,\.\!\?\s])", text)
+    chunks, current = [], ""
+    for token in tokens:
+        if not token:
+            continue
+        if len(current) + len(token) <= max_chars:
+            current += token
+        else:
+            if current.strip():
+                chunks.append(current.strip())
+            while len(token) > max_chars:
+                chunks.append(token[:max_chars].strip())
+                token = token[max_chars:]
+            current = token
+    if current.strip():
+        chunks.append(current.strip())
+    return chunks
+
+def render_myanmar_subtitle_rgba(
+    text: str, font_path: str, size_scale_pct: int, vid_w: int,
+    text_hex: str = "#38BDF8"
+) -> Image.Image:
+    clean_txt = clean_text_for_myanmar_font(text) or " "
+    base_pt = 19 * (size_scale_pct / 100.0)
+    scaled_px = max(14, int(base_pt * (vid_w / 540.0)))
+    try:
+        font = ImageFont.truetype(font_path, scaled_px)
+    except Exception:
+        font = ImageFont.load_default()
+
+    dummy_img = Image.new("RGBA", (10, 10))
+    d_draw = ImageDraw.Draw(dummy_img)
+    try:
+        bbox = d_draw.textbbox((0, 0), clean_txt, font=font)
+        tw, th = max(10, bbox[2] - bbox[0]), max(10, bbox[3] - bbox[1])
+        offset_x, offset_y = -bbox[0], -bbox[1]
+    except Exception:
+        tw, th, offset_x, offset_y = 300, 40, 0, 0
+
+    sp = max(2, int(round(2.2 * (vid_w / 720.0))))
+    pad_x = int(16 * (vid_w / 720.0))
+    pad_y = int(10 * (vid_w / 720.0))
+    img_w = tw + (sp * 2) + (pad_x * 2)
+    img_h = th + (sp * 2) + (pad_y * 2)
+
+    canvas = Image.new("RGBA", (img_w, img_h), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+
+    # RecapMM စတိုင် အမည်းရောင် Pill Background ဘောင်
+    draw.rounded_rectangle(
+        [2, 2, img_w - 2, img_h - 2],
+        radius=int(img_h * 0.35),
+        fill=(15, 15, 15, 165)
+    )
+
+    x_pos = pad_x + sp + offset_x
+    y_pos = pad_y + sp + offset_y
+    text_rgba = hex_to_rgba(text_hex, 255)
+
+    for ox in range(-sp, sp + 1):
+        for oy in range(-sp, sp + 1):
+            if ox != 0 or oy != 0:
+                draw.text((x_pos + ox, y_pos + oy), clean_txt, font=font, fill=(0, 0, 0, 255))
+
+    draw.text((x_pos, y_pos), clean_txt, font=font, fill=text_rgba)
+
+    # 9:16 ဗီဒီယိုဘောင်အတွင်း 92% ထက် လုံးဝမကျော်စေရန် Auto-Fit လုပ်ခြင်း
+    max_allowed_w = int(vid_w * 0.92)
+    if canvas.width > max_allowed_w:
+        ratio = max_allowed_w / float(canvas.width)
+        canvas = canvas.resize((max_allowed_w, max(14, int(canvas.height * ratio))), Image.LANCZOS)
+    return canvas
+
+def render_watermark_rgba(wm_text: str, font_path: str, wm_opacity_pct: int, wm_size_pct: int, vid_w: int) -> Image.Image:
+    clean_wm = wm_text.strip()
+    if not clean_wm:
+        return None
+    scaled_px = max(12, int(16 * (wm_size_pct / 100.0) * (vid_w / 540.0)))
+    try:
+        font = ImageFont.truetype(font_path, scaled_px)
+    except Exception:
+        font = ImageFont.load_default()
+
+    dummy = Image.new("RGBA", (10, 10))
+    d_draw = ImageDraw.Draw(dummy)
+    bbox = d_draw.textbbox((0, 0), clean_wm, font=font)
+    tw, th = max(10, bbox[2] - bbox[0]), max(10, bbox[3] - bbox[1])
+    alpha_val = int(255 * (wm_opacity_pct / 100.0))
+
+    canvas = Image.new("RGBA", (tw + 16, th + 12), (0, 0, 0, 0))
+    draw = ImageDraw.Draw(canvas)
+    draw.text((8 - bbox[0], 6 - bbox[1]), clean_wm, font=font, fill=(255, 255, 255, alpha_val))
+    return canvas
+
+def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_dur: float = 6.0) -> list:
+    merged = []
+    for seg in raw_segments:
+        text = seg.get("text", "").strip() if isinstance(seg, dict) else getattr(seg, "text", "").strip()
+        start = float(seg.get("start", 0.0) if isinstance(seg, dict) else getattr(seg, "start", 0.0))
+        end = float(seg.get("end", 0.0) if isinstance(seg, dict) else getattr(seg, "end", 0.0))
+        if not text or end <= start:
+            continue
+        if merged and (start - merged[-1]["end"] <= max_gap) and (end - merged[-1]["start"] <= max_dur):
+            merged[-1]["end"] = end
+            merged[-1]["text"] += " " + text
+        else:
+            merged.append({"start": start, "end": end, "text": text})
+    return merged
+
+def translate_segments_recap_style(gemini_client, groq_client, preferred_model: str, segments: list, style_mode: str):
+    if style_mode == "third_person":
+        style_instr = "Rewrite and translate into natural Burmese (Myanmar) as a THIRD-PERSON movie recap narrator. Keep each line concise."
+    elif style_mode == "first_person":
+        style_instr = "Rewrite and translate into natural Burmese (Myanmar) from a FIRST-PERSON perspective ('ကျွန်တော်/ကျွန်မ'). Keep each line concise."
+    else:
+        style_instr = "Translate directly and naturally into spoken Burmese (Myanmar) keeping original POV. Keep each line concise."
+
+    fallback_models = [preferred_model.strip(), "gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]
+    model_chain = []
+    for m in fallback_models:
+        if m not in model_chain:
+            model_chain.append(m)
+
+    batch_size = 25
+    for i in range(0, len(segments), batch_size):
+        batch = segments[i:i + batch_size]
+        payload = [{"id": idx, "text": s["text"]} for idx, s in enumerate(batch)]
+        prompt = (
+            f"{style_instr}\nDo not use emojis or special symbols. "
+            f"Return ONLY a JSON list of objects with 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"
+        )
+
+        translated_ok = False
+        for model_name in model_chain:
+            for _ in range(2):
+                try:
+                    resp = gemini_client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(response_mime_type="application/json")
+                    )
+                    parsed = json.loads(resp.text.strip())
+                    if isinstance(parsed, dict) and "translations" in parsed:
+                        parsed = parsed["translations"]
+                    t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if "id" in item}
+                    for idx, s in enumerate(batch):
+                        s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
+                    translated_ok = True
+                    break
+                except Exception as e:
+                    if "503" in str(e) or "429" in str(e):
+                        time.sleep(1.5)
+                        continue
+                    break
+            if translated_ok:
+                break
+
+        if not translated_ok:
+            groq_resp = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[
+                    {"role": "system", "content": f"{style_instr} Output valid JSON only."},
+                    {"role": "user", "content": f"Return JSON object with key 'items' containing list of 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"}
+                ],
+                response_format={"type": "json_object"}
+            )
+            g_data = json.loads(groq_resp.choices[0].message.content)
+            g_list = g_data.get("items", g_data) if isinstance(g_data, dict) else g_data
+            t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in g_list if isinstance(item, dict) and "id" in item}
+            for idx, s in enumerate(batch):
+                s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
+
+async def synthesize_all_tts(segments, voice_id, rate_str, pitch_str):
+    sem = asyncio.Semaphore(8)
+    async def _one(idx, text):
+        async with sem:
+            raw_mp3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+            trimmed_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+            comm = edge_tts.Communicate(text=text or " ", voice=voice_id, rate=rate_str, pitch=pitch_str)
+            with open(raw_mp3, "wb") as f:
+                async for chunk in comm.stream():
+                    if chunk["type"] == "audio":
+                        f.write(chunk["data"])
+            subprocess.run([
+                "ffmpeg", "-y", "-i", raw_mp3,
+                "-af", "silenceremove=start_periods=1:start_silence=0.03:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse",
+                "-ar", "44100", "-ac", "1", trimmed_wav
+            ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            dur = get_media_duration(trimmed_wav)
+            if dur <= 0.05:
+                subprocess.run(["ffmpeg", "-y", "-i", raw_mp3, "-ar", "44100", "-ac", "1", trimmed_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                dur = max(0.3, get_media_duration(trimmed_wav))
+            if os.path.exists(raw_mp3):
+                os.remove(raw_mp3)
+            return idx, trimmed_wav, dur
+
+    return await asyncio.gather(*[_one(i, s["translated"]) for i, s in enumerate(segments)])
+
+def render_916_fast_video(
+    video_path: str,
+    tts_audio_path: str,
+    timeline: list,
+    sub_overlays: list,
+    out_w: int,
+    out_h: int,
+    vid_fps: float,
+    enable_blur1: bool,
+    blur1_box: tuple,
+    enable_blur2: bool,
+    blur2_box: tuple,
+    blur_opacity_pct: int,
+    show_sub: bool,
+    sub_y_pct: int,
+    wm_rgba: Image.Image,
+    mirror_vid: bool,
+    zoom_pct: int,
+    brightness_val: float,
+    contrast_val: float,
+    saturation_val: float,
+    orig_vol_pct: int,
+    vo_vol_pct: int,
+    progress_bar,
+    step_text_placeholder
+) -> str:
+    """
+    9:16 Portrait (720x1280) အချိုးအစားအမှန်ဖြင့် အမြန်ဆုံးနှင့် ဖိုင်ဆိုဒ်အသေးဆုံး
+    Render လုပ်ပေးပြီး လုပ်ဆောင်နေသည့် အဆင့်နှင့် % ကို တိုက်ရိုက်ပြသပေးသည့် စနစ်
+    """
+    raw_out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+    web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
+
+    # 9:16 Portrait Canvas အတွင်း မူရင်း Video ကို အချိုးကျ ထည့်သွင်းခြင်း
+    vf_chain = [f"fps={vid_fps:.2f}"]
+    if mirror_vid:
+        vf_chain.append("hflip")
+
+    if zoom_pct != 100:
+        zf = zoom_pct / 100.0
+        vf_chain.append(f"scale=iw*{zf:.3f}:ih*{zf:.3f},crop=iw/{zf:.3f}:ih/{zf:.3f}")
+
+    vf_chain.append(
+        f"scale={out_w}:{out_h}:force_original_aspect_ratio=decrease,"
+        f"pad={out_w}:{out_h}:(ow-iw)/2:(oh-ih)/2:color=#090D16,setsar=1"
+    )
+
+    if abs(brightness_val) > 0.01 or abs(contrast_val - 1.0) > 0.01 or abs(saturation_val - 1.0) > 0.01:
+        vf_chain.append(f"eq=brightness={brightness_val:.2f}:contrast={contrast_val:.2f}:saturation={saturation_val:.2f}")
+
+    vf_chain.append("format=rgb24")
+    curr_vf = ",".join(vf_chain)
+
+    sigma_val = max(3.0, 20.0 * (blur_opacity_pct / 100.0))
+    if enable_blur1 and blur_opacity_pct > 0:
+        b1x, b1y, b1w, b1h = blur1_box
+        curr_vf += (
+            f",split=2[vm1][vc1];"
+            f"[vc1]crop={b1w}:{b1h}:{b1x}:{b1y},gblur=sigma={sigma_val:.1f},eq=brightness=-0.15[vb1];"
+            f"[vm1][vb1]overlay={b1x}:{b1y}"
+        )
+
+    if enable_blur2 and blur_opacity_pct > 0:
+        b2x, b2y, b2w, b2h = blur2_box
+        curr_vf += (
+            f",split=2[vm2][vc2];"
+            f"[vc2]crop={b2w}:{b2h}:{b2x}:{b2y},gblur=sigma={sigma_val:.1f},eq=brightness=-0.15[vb2];"
+            f"[vm2][vb2]overlay={b2x}:{b2y}"
+        )
+
+    decoder_cmd = ["ffmpeg", "-v", "error", "-i", video_path, "-vf", curr_vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
+    encoder_cmd = [
+        "ffmpeg", "-y", "-v", "error",
+        "-f", "rawvideo", "-vcodec", "rawvideo",
+        "-s", f"{out_w}x{out_h}", "-pix_fmt", "rgb24", "-r", f"{vid_fps:.2f}",
+        "-i", "pipe:0",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24",
+        "-maxrate", "2000k", "-bufsize", "4000k",
+        "-profile:v", "main", "-pix_fmt", "yuv420p", "-threads", "2",
+        raw_out_video
+    ]
+
+    dec_proc = subprocess.Popen(decoder_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    enc_proc = subprocess.Popen(encoder_cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+
+    frame_bytes_len = out_w * out_h * 3
+    total_out_dur = sum(item["target_dur"] for item in timeline)
+    total_out_frames = max(1, int(round(total_out_dur * vid_fps)))
+
+    out_cursor = 0.0
+    time_segments = []
+    for item in timeline:
+        td = max(0.02, item["target_dur"])
+        time_segments.append({"out_start": out_cursor, "out_end": out_cursor + td, "in_start": item["v_start"], "in_end": item["v_end"]})
+        out_cursor += td
+
+    curr_in_frame_idx = -1
+    curr_in_frame_bytes = None
+    eof_reached = False
+    seg_ptr = 0
+    sub_ptr = 0
+    num_subs = len(sub_overlays)
+    frames_written = 0
+
+    sub_cy = int(out_h * (sub_y_pct / 100.0))
+    wx, wy = int(out_w * 0.72), int(out_h * 0.05)
+
+    for out_idx in range(total_out_frames):
+        t_out = out_idx / float(vid_fps)
+        while seg_ptr < len(time_segments) - 1 and t_out >= time_segments[seg_ptr]["out_end"]:
+            seg_ptr += 1
+        seg = time_segments[seg_ptr]
+
+        seg_out_dur = max(0.001, seg["out_end"] - seg["out_start"])
+        ratio = min(1.0, max(0.0, (t_out - seg["out_start"]) / seg_out_dur))
+        t_in = seg["in_start"] + ratio * (seg["in_end"] - seg["in_start"])
+        target_in_idx = max(0, int(round(t_in * vid_fps)))
+
+        while not eof_reached and curr_in_frame_idx < target_in_idx:
+            raw = dec_proc.stdout.read(frame_bytes_len)
+            if len(raw) < frame_bytes_len:
+                eof_reached = True
+                break
+            curr_in_frame_bytes = raw
+            curr_in_frame_idx += 1
+
+        if curr_in_frame_bytes is None:
+            break
+
+        active_sub = None
+        if show_sub:
+            while sub_ptr < num_subs and sub_overlays[sub_ptr]["end"] < t_out:
+                sub_ptr += 1
+            if sub_ptr < num_subs and sub_overlays[sub_ptr]["start"] <= t_out <= sub_overlays[sub_ptr]["end"]:
+                active_sub = sub_overlays[sub_ptr]
+
+        if active_sub is not None or wm_rgba is not None:
+            frame_img = Image.frombytes("RGB", (out_w, out_h), curr_in_frame_bytes)
+            if wm_rgba is not None:
+                frame_img.paste(wm_rgba, (wx, wy), wm_rgba)
+            if active_sub is not None:
+                sub_rgba = active_sub["img"]
+                ox = max(4, (out_w - sub_rgba.width) // 2)
+                oy = min(max(4, sub_cy - (sub_rgba.height // 2)), out_h - sub_rgba.height - 4)
+                frame_img.paste(sub_rgba, (ox, oy), sub_rgba)
+            frame_to_write = frame_img.tobytes()
+        else:
+            frame_to_write = curr_in_frame_bytes
+
+        try:
+            enc_proc.stdin.write(frame_to_write)
+            frames_written += 1
+        except BrokenPipeError:
+            break
+
+        if out_idx % 20 == 0:
+            pct = int((out_idx / float(total_out_frames)) * 100)
+            progress_bar.progress(min(0.95, out_idx / float(total_out_frames)))
+            step_text_placeholder.info(
+                f"🎞️ **အဆင့် ၄/၄ ({pct}%)** - 9:16 Video Frame ({out_idx}/{total_out_frames}) တွင် Blur နှင့် မြန်မာစာတန်း ရေးဆွဲနေပါသည်..."
+            )
+
+    try:
+        if enc_proc.stdin:
+            enc_proc.stdin.close()
+    except Exception:
+        pass
+    try:
+        if dec_proc.stdout:
+            dec_proc.stdout.close()
+    except Exception:
+        pass
+
+    dec_err = dec_proc.stderr.read().decode("utf-8", errors="ignore") if dec_proc.stderr else ""
+    enc_err = enc_proc.stderr.read().decode("utf-8", errors="ignore") if enc_proc.stderr else ""
+    dec_proc.wait()
+    enc_proc.wait()
+
+    if frames_written == 0 or not os.path.exists(raw_out_video) or os.path.getsize(raw_out_video) < 1000:
+        raise RuntimeError(f"Video Render မအောင်မြင်ပါ:\nDecoder: {dec_err}\nEncoder: {enc_err}")
+
+    step_text_placeholder.info("🔊 နောက်ဆုံးအဆင့် (98%) - Voiceover အသံနှင့် MP4 FastStart ပေါင်းစပ်နေပါသည်...")
+    vo_gain = max(0.1, vo_vol_pct / 100.0)
+    if orig_vol_pct > 0:
+        orig_gain = orig_vol_pct / 100.0
+        af_mix = f"[1:a]volume={vo_gain:.2f}[vo];[2:a]volume={orig_gain:.2f}[oa];[vo][oa]amix=inputs=2:duration=first:normalize=0[aout]"
+        subprocess.run([
+            "ffmpeg", "-y", "-v", "error",
+            "-i", raw_out_video, "-i", tts_audio_path, "-i", video_path,
+            "-filter_complex", af_mix,
+            "-map", "0:v:0", "-map", "[aout]",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", "-shortest", web_ready_video
+        ], check=True)
+    else:
+        subprocess.run([
+            "ffmpeg", "-y", "-v", "error",
+            "-i", raw_out_video, "-i", tts_audio_path,
+            "-af", f"volume={vo_gain:.2f}",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-c:a", "aac", "-b:a", "128k",
+            "-movflags", "+faststart", "-shortest", web_ready_video
+        ], check=True)
+
+    if os.path.exists(raw_out_video):
+        os.remove(raw_out_video)
+    progress_bar.progress(1.0)
+    return web_ready_video
+
+# ==================== 9:16 INTERACTIVE LOCAL PREVIEW HTML ====================
+def build_916_preview_component(b1_y: int, b1_h: int, b2_on: bool, b2_y: int, sub_y: int, sub_clr: str, wm_txt: str) -> str:
+    return f"""
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Myanmar:wght@700&display=swap" rel="stylesheet">
+<style>
+    * {{ box-sizing: border-box; user-select: none; }}
+    body {{ margin: 0; padding: 0; background: transparent; font-family: 'Noto Sans Myanmar', sans-serif; }}
+    .wrap-916 {{
+        width: 250px;
+        height: 444px;
+        margin: 0 auto;
+        background: #090D16;
+        border-radius: 16px;
+        border: 2px solid #334155;
         position: relative;
-        display: inline-block;
-        width: 44px;
-        height: 24px;
+        overflow: hidden;
+        box-shadow: 0 6px 18px rgba(15, 23, 42, 0.18);
     }}
-    .switch input {{ opacity: 0; width: 0; height: 0; }}
-    .slider-pill {{
-        position: absolute;
-        cursor: pointer;
-        top: 0; left: 0; right: 0; bottom: 0;
-        background-color: #CBD5E1;
-        transition: .25s;
-        border-radius: 24px;
-    }}
-    .slider-pill:before {{
-        position: absolute;
-        content: "";
-        height: 18px;
-        width: 18px;
-        left: 3px;
-        bottom: 3px;
-        background-color: white;
-        transition: .25s;
-        border-radius: 50%;
-    }}
-    input:checked + .slider-pill.cyan {{ background-color: #0284C7; }}
-    input:checked + .slider-pill.pink {{ background-color: #C026D3; }}
-    input:checked + .slider-pill.orange {{ background-color: var(--accent-orange); }}
-    input:checked + .slider-pill:before {{ transform: translateX(20px); }}
-
-    /* RATIO BUTTONS */
-    .ratio-row {{
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 8px;
-        margin: 8px 0;
-    }}
-    .r-btn {{
-        padding: 8px 4px;
-        background: #F8FAFC;
-        border: 1.5px solid #CBD5E1;
-        border-radius: 10px;
-        font-weight: 800;
-        color: #334155;
-        text-align: center;
-        cursor: pointer;
-        font-size: 0.84rem;
-    }}
-    .r-btn.active {{
-        background: #FFF7ED;
-        border-color: var(--accent-orange);
-        color: var(--accent-orange);
-    }}
-    /* NARRATION & VOICE CARDS */
-    .select-card {{
-        padding: 10px 12px;
-        border: 1.5px solid #E2E8F0;
-        background: #F8FAFC;
-        border-radius: 12px;
-        margin-bottom: 8px;
-        cursor: pointer;
-    }}
-    .select-card.active {{
-        background: var(--accent-orange);
-        border-color: var(--accent-orange);
-        color: #FFFFFF !important;
-    }}
-    .select-card.active .sc-title, .select-card.active .sc-sub {{
-        color: #FFFFFF !important;
-    }}
-    .sc-title {{ font-weight: 800; font-size: 0.88rem; color: var(--text-dark); }}
-    .sc-sub {{ font-size: 0.78rem; color: var(--text-muted); margin-top: 2px; }}
-
-    .voice-row {{
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 9px 12px;
-        border: 1.5px solid #E2E8F0;
-        background: #F8FAFC;
-        border-radius: 12px;
-        margin-bottom: 7px;
-        cursor: pointer;
-    }}
-    .voice-row.active {{
-        border-color: var(--accent-orange);
-        background: #FFF7ED;
-    }}
-    .v-sample-btn {{
-        background: #E2E8F0;
-        border: none;
-        border-radius: 50%;
-        width: 28px;
-        height: 28px;
-        font-size: 0.78rem;
-        cursor: pointer;
-    }}
-    /* ACTION BUTTONS */
-    .btn-primary {{
+    video {{
         width: 100%;
-        padding: 12px;
-        background: linear-gradient(90deg, #EA580C 0%, #F97316 100%);
+        height: 100%;
+        object-fit: contain;
+        display: block;
+    }}
+    .pick-overlay {{
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        right: 10px;
+        display: flex;
+        justify-content: space-between;
+        z-index: 20;
+    }}
+    .pick-btn {{
+        background: rgba(15, 23, 42, 0.85);
         color: #FFFFFF;
-        border: none;
-        border-radius: 12px;
-        font-weight: 800;
-        font-size: 0.94rem;
-        cursor: pointer;
-        box-shadow: 0 4px 12px rgba(234, 88, 12, 0.22);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 6px;
-    }}
-    .btn-secondary {{
-        width: 100%;
-        padding: 10px;
-        background: #F1F5F9;
-        color: #0F172A;
-        border: 1px solid #CBD5E1;
-        border-radius: 10px;
+        border: 1.5px solid #14B8A6;
+        padding: 5px 10px;
+        border-radius: 8px;
+        font-size: 0.74rem;
         font-weight: 700;
-        font-size: 0.86rem;
         cursor: pointer;
-        margin-bottom: 8px;
     }}
-    /* SCRIPT SEGMENT LIST */
-    .seg-box {{
-        background: #F8FAFC;
-        border: 1px solid #CBD5E1;
+    .blur-box-1 {{
+        position: absolute;
+        left: 6%;
+        width: 88%;
+        top: {b1_y}%;
+        height: {b1_h}%;
+        backdrop-filter: blur(10px);
+        background: rgba(20, 20, 20, 0.45);
+        border: 2px solid #00E5FF;
         border-radius: 10px;
-        padding: 8px;
-        margin-bottom: 8px;
+        pointer-events: none;
     }}
-    .seg-top {{
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 4px;
+    .blur-box-2 {{
+        position: absolute;
+        left: 6%;
+        width: 45%;
+        top: {b2_y}%;
+        height: 8%;
+        backdrop-filter: blur(10px);
+        background: rgba(20, 20, 20, 0.45);
+        border: 2px solid #D946EF;
+        border-radius: 8px;
+        display: {'block' if b2_on else 'none'};
+        pointer-events: none;
     }}
-    .seg-time {{
-        background: #E2E8F0;
-        color: #1E293B;
+    .sub-pill {{
+        position: absolute;
+        left: 50%;
+        top: {sub_y}%;
+        transform: translate(-50%, -50%);
+        width: 90%;
+        text-align: center;
+        background: rgba(15, 15, 15, 0.75);
+        color: {sub_clr};
+        padding: 5px 8px;
+        border-radius: 10px;
+        font-size: 0.78rem;
+        font-weight: 700;
+        text-shadow: 1px 1px 2px #000;
+        border: 1px solid rgba(255,255,255,0.2);
+        pointer-events: none;
+    }}
+    .wm-label {{
+        position: absolute;
+        right: 12px;
+        top: 42px;
+        color: rgba(255,255,255,0.55);
         font-size: 0.72rem;
         font-weight: 700;
-        padding: 2px 7px;
-        border-radius: 6px;
-    }}
-    .seg-del {{
-        background: none;
-        border: none;
-        color: #EF4444;
-        cursor: pointer;
-        font-size: 0.95rem;
-    }}
-    .seg-input {{
-        width: 100%;
-        border: 1px solid #CBD5E1;
-        border-radius: 8px;
-        padding: 7px;
-        font-family: 'Noto Sans Myanmar', sans-serif;
-        font-size: 0.86rem;
-        color: #0F172A;
-        background: #FFFFFF;
-        resize: vertical;
-    }}
-    /* FONT GRID */
-    .font-grid {{
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-        margin: 8px 0;
-    }}
-    .font-card {{
-        padding: 9px;
-        border: 1.5px solid #CBD5E1;
-        border-radius: 10px;
-        background: #F8FAFC;
-        text-align: center;
-        cursor: pointer;
-    }}
-    .font-card.active {{
-        border-color: var(--accent-orange);
-        background: #FFF7ED;
-    }}
-    .color-row {{
-        display: flex;
-        gap: 14px;
-        margin: 8px 0;
-    }}
-    .c-swatch {{
-        width: 32px;
-        height: 32px;
-        border-radius: 50%;
-        cursor: pointer;
-        border: 2px solid #94A3B8;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-weight: bold;
-    }}
-    .c-swatch.active {{
-        border: 3px solid var(--accent-orange);
-        transform: scale(1.1);
-    }}
-    .slider-group {{ margin-bottom: 10px; }}
-    .slider-head {{
-        display: flex;
-        justify-content: space-between;
-        font-size: 0.82rem;
-        font-weight: 700;
-        margin-bottom: 3px;
-    }}
-    .full-slider {{ width: 100%; accent-color: var(--accent-orange); }}
-    .status-banner {{
-        margin-top: 8px;
-        padding: 9px;
-        border-radius: 10px;
-        background: #EFF6FF;
-        border: 1px solid #BFDBFE;
-        color: #1E40AF;
-        font-size: 0.82rem;
-        font-weight: 600;
-        display: none;
+        pointer-events: none;
     }}
 </style>
 </head>
 <body>
-
-<div class="split-layout">
-
-    <!-- ==================== ၁။ အပေါ်ပိုင်း FIXED VIDEO PANE (အသေထားရှိသည့်အပိုင်း) ==================== -->
-    <div class="fixed-video-pane">
-        <div class="topbar-compact">
-            <div class="brand-logo">Recap<span>MM</span> • Studio99</div>
-            <div class="top-right-btns">
-                <label class="mini-gallery-btn">
-                    <span>🖼️ Gallery မှ ရွေးမည်</span>
-                    <input type="file" id="galleryVideoInput" accept="video/*" style="display:none">
-                </label>
-                <button class="key-btn" onclick="toggleApiModal()">🔑 Keys</button>
-            </div>
-        </div>
-
-        <div class="canvas-stage">
-            <canvas id="mainCanvas" width="540" height="960"></canvas>
-        </div>
-
-        <div class="player-bar">
-            <button class="play-Pause-btn" id="playBtn">▶</button>
-            <input type="range" class="seek-bar" id="seekBar" min="0" max="100" step="0.05" value="0">
-            <span class="time-label" id="timeLabel">0:00 / 0:00</span>
-        </div>
+<div class="wrap-916">
+    <div class="pick-overlay">
+        <label class="pick-btn">
+            🖼️ Local အမြန်စမ်းကြည့်ရန်
+            <input type="file" accept="video/*" style="display:none" onchange="if(this.files[0]) document.getElementById('pvVid').src=URL.createObjectURL(this.files[0])">
+        </label>
     </div>
-
-    <!-- ==================== ၂။ အောက်ပိုင်း SCROLLABLE TOOLS PANE (အောက်သို့ ဆွဲကြည့်နိုင်သည့်အပိုင်း) ==================== -->
-    <div class="scrollable-tools-pane">
-
-        <!-- API KEYS DRAWER -->
-        <div class="card" id="apiModal" style="display:none; border-color:#0284C7;">
-            <div class="step-title" style="margin-bottom:8px;">🔑 API Keys & Gemini 3.5</div>
-            <div style="margin-bottom:8px;">
-                <label style="font-size:0.78rem;font-weight:700;">Groq API Key:</label>
-                <input type="password" id="groqKeyInput" value="{default_groq}" placeholder="gsk_..." style="width:100%;padding:8px;border-radius:8px;border:1px solid #CBD5E1;margin-top:3px;">
-            </div>
-            <div style="margin-bottom:8px;">
-                <label style="font-size:0.78rem;font-weight:700;">Gemini API Key:</label>
-                <input type="password" id="geminiKeyInput" value="{default_gemini}" placeholder="AIzaSy..." style="width:100%;padding:8px;border-radius:8px;border:1px solid #CBD5E1;margin-top:3px;">
-            </div>
-            <button class="btn-secondary" style="margin-bottom:0;" onclick="saveKeysToLocal()">✅ သိမ်းဆည်းမည်</button>
-        </div>
-
-        <!-- BLUR MASK & RATIO CARD -->
-        <div class="card">
-            <div class="step-title" style="margin-bottom:8px;">🌫️ Blur Mask (Video ပေါ်တွင် Blur ကို လက်ဖြင့်ဆွဲရွှေ့ပါ)</div>
-            <div style="font-size:0.76rem;color:var(--text-muted);margin-bottom:8px;">📌 မူရင်း Video ကို ရွှေ့မရအောင် ပုံသေထားပေးထားပါသည်။ Blur နှင့် စာတန်းကိုသာ လက်ဖြင့် ဖိဆွဲရွှေ့နိုင်ပါသည်။</div>
-
-            <div class="blur-item">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <label class="switch">
-                        <input type="checkbox" id="blur1Chk" checked>
-                        <span class="slider-pill cyan"></span>
-                    </label>
-                    <span style="font-weight:700;color:#0284C7;font-size:0.88rem;">Blur 1 (အောက်စာတန်း)</span>
-                </div>
-                <button class="btn-secondary" style="width:auto;padding:4px 9px;margin:0;font-size:0.76rem;" onclick="resetBlur1()">နေရာပြန်ချိန်</button>
-            </div>
-
-            <div class="blur-item">
-                <div style="display:flex;align-items:center;gap:10px;">
-                    <label class="switch">
-                        <input type="checkbox" id="blur2Chk">
-                        <span class="slider-pill pink"></span>
-                    </label>
-                    <span style="font-weight:700;color:#C026D3;font-size:0.88rem;">Blur 2 (အပေါ် Logo)</span>
-                </div>
-                <button class="btn-secondary" style="width:auto;padding:4px 9px;margin:0;font-size:0.76rem;" onclick="clearAllBlurs()">🗑️ Blur အားလုံးဖျက်</button>
-            </div>
-
-            <div class="slider-group" style="margin-top:8px;">
-                <div class="slider-head">
-                    <span>Blur အထူ (Opacity)</span>
-                    <span id="blurOpVal">100%</span>
-                </div>
-                <input type="range" class="full-slider" id="blurOpacity" min="0" max="100" value="100" oninput="document.getElementById('blurOpVal').innerText=this.value+'%'">
-            </div>
-
-            <hr style="border:none;border-top:1px solid #E2E8F0;margin:10px 0;">
-
-            <div class="step-title" style="font-size:0.92rem;">📐 Video Ratio & Background</div>
-            <div class="ratio-row">
-                <div class="r-btn active" onclick="changeRatio('9:16', this)">9:16</div>
-                <div class="r-btn" onclick="changeRatio('16:9', this)">16:9</div>
-                <div class="r-btn" onclick="changeRatio('1:1', this)">1:1</div>
-                <div class="r-btn" onclick="changeRatio('4:3', this)">4:3</div>
-            </div>
-            <label class="btn-secondary" style="display:flex;align-items:center;justify-content:center;gap:6px;margin-bottom:0;">
-                <span>🏞️ 9:16 နောက်ခံပုံ (Background) တင်မည်</span>
-                <input type="file" id="bgFileInput" accept="image/*" style="display:none">
-            </label>
-        </div>
-
-        <!-- STEP 1: မြန်မာဘာသာပြန် SCRIPT -->
-        <div class="card">
-            <div class="step-head">
-                <div class="step-num">1</div>
-                <div class="step-title">မြန်မာဘာသာပြန် Script</div>
-            </div>
-
-            <div class="select-card active" onclick="selectNarration('direct', this)">
-                <div class="sc-title">Direct Translation</div>
-                <div class="sc-sub">မူရင်း POV နှင့် အဓိပ္ပာယ်ကို မပြောင်းဘဲ ဘာသာပြန်မယ်</div>
-            </div>
-            <div class="select-card" onclick="selectNarration('third', this)">
-                <div class="sc-title">Third Person</div>
-                <div class="sc-sub">ပြင်ပဇာတ်ကြောင်းပြောသူအနေနဲ့ ဖြစ်စဉ်ကို ပြောမယ်</div>
-            </div>
-            <div class="select-card" onclick="selectNarration('first', this)">
-                <div class="sc-title">First Person</div>
-                <div class="sc-sub">အဓိကဇာတ်ကောင် ကိုယ်တိုင်ပြောသလို ပြောမယ်</div>
-            </div>
-
-            <button class="btn-primary" id="genScriptBtn" onclick="generateScriptFromLocalVideo()" style="margin-top:8px;">
-                🪄 Script ပြန်ထုတ်မယ်
-            </button>
-            <div class="status-banner" id="scriptStatus"></div>
-
-            <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px;margin-bottom:6px;">
-                <span style="font-size:0.8rem;font-weight:700;color:var(--text-muted);" id="segCountLabel">စာကြောင်း: 2 | ပြင်ချင်တာ ပြင်နိုင်ပါတယ်</span>
-                <button class="btn-secondary" style="width:auto;padding:4px 9px;margin:0;font-size:0.78rem;color:var(--accent-orange);" onclick="addBlankSegment()">＋ စာကြောင်းထည့်</button>
-            </div>
-
-            <div id="segmentsContainer"></div>
-        </div>
-
-        <!-- STEP 2: VOICEOVER အသံရွေးပါ -->
-        <div class="card">
-            <div class="step-head">
-                <div class="step-num">2</div>
-                <div class="step-title">Voiceover အသံရွေးပါ</div>
-            </div>
-
-            <div id="voiceListContainer">
-                <div class="voice-row" onclick="selectVoice(0, this)">
-                    <span style="font-weight:700;font-size:0.88rem;">မိန်းကလေး ၁ - တည်ငြိမ်</span>
-                    <button class="v-sample-btn" onclick="event.stopPropagation();previewVoice(0)">▶</button>
-                </div>
-                <div class="voice-row" onclick="selectVoice(1, this)">
-                    <span style="font-weight:700;font-size:0.88rem;">မိန်းကလေး ၂ - ပေါ့ပါး</span>
-                    <button class="v-sample-btn" onclick="event.stopPropagation();previewVoice(1)">▶</button>
-                </div>
-                <div class="voice-row" onclick="selectVoice(2, this)">
-                    <span style="font-weight:700;font-size:0.88rem;">မိန်းကလေး ၃ - နုပျို</span>
-                    <button class="v-sample-btn" onclick="event.stopPropagation();previewVoice(2)">▶</button>
-                </div>
-                <div class="voice-row" onclick="selectVoice(3, this)">
-                    <span style="font-weight:700;font-size:0.88rem;">ယောက်ျား ၁ - တက်ကြွ</span>
-                    <button class="v-sample-btn" onclick="event.stopPropagation();previewVoice(3)">▶</button>
-                </div>
-                <div class="voice-row active" onclick="selectVoice(4, this)">
-                    <span style="font-weight:700;font-size:0.88rem;">ယောက်ျား ၂ - လေးနက်</span>
-                    <button class="v-sample-btn" onclick="event.stopPropagation();previewVoice(4)">▶</button>
-                </div>
-                <div class="voice-row" onclick="selectVoice(5, this)">
-                    <span style="font-weight:700;font-size:0.88rem;">ယောက်ျား ၃ - စိတ်လှုပ်ရှား</span>
-                    <button class="v-sample-btn" onclick="event.stopPropagation();previewVoice(5)">▶</button>
-                </div>
-            </div>
-
-            <button class="btn-primary" id="genVoBtn" onclick="generateVoiceoverAudio()" style="margin-top:6px;">
-                🎙️ Voiceover ပြန်ဖန်တီးမယ်
-            </button>
-            <div class="status-banner" id="voStatus"></div>
-
-            <div class="slider-group" style="margin-top:10px;">
-                <div class="slider-head">
-                    <span>အသံ အစော / အနောက် ချိန်</span>
-                    <span id="offsetVal">0.0s</span>
-                </div>
-                <input type="range" class="full-slider" id="audioOffsetSlider" min="-2.0" max="2.0" step="0.1" value="0.0" oninput="document.getElementById('offsetVal').innerText=this.value+'s'">
-            </div>
-        </div>
-
-        <!-- STEP 3: VIDEO ချိန်ညှိမှု -->
-        <div class="card">
-            <div class="step-head">
-                <div class="step-num">3</div>
-                <div class="step-title">Video ချိန်ညှိမှု</div>
-            </div>
-
-            <div class="blur-item">
-                <span style="font-weight:700;font-size:0.88rem;">ဘယ်ညာ ပြောင်းပြန်လှည့် (Mirror)</span>
-                <label class="switch">
-                    <input type="checkbox" id="mirrorChk">
-                    <span class="slider-pill orange"></span>
-                </label>
-            </div>
-
-            <div class="blur-item">
-                <span style="font-weight:700;font-size:0.88rem;">မြန်မာစာတန်း video ထဲ ထည့်မယ်</span>
-                <label class="switch">
-                    <input type="checkbox" id="showSubChk" checked>
-                    <span class="slider-pill orange"></span>
-                </label>
-            </div>
-
-            <div class="font-grid">
-                <div class="font-card active" onclick="selectFont('Noto Sans Myanmar', this)">
-                    <div style="font-size:0.95rem;font-weight:700;">မင်္ဂလာပါ</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);">Noto Sans</div>
-                </div>
-                <div class="font-card" onclick="selectFont('Noto Serif Myanmar', this)">
-                    <div style="font-size:0.95rem;font-family:'Noto Serif Myanmar';font-weight:700;">မင်္ဂလာပါ</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);">Noto Serif</div>
-                </div>
-                <div class="font-card" onclick="selectFont('Padauk', this)">
-                    <div style="font-size:0.95rem;font-family:'Padauk';font-weight:700;">မင်္ဂလာပါ</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);">Padauk</div>
-                </div>
-                <div class="font-card" onclick="document.getElementById('customFontInput').click()">
-                    <div style="font-size:0.9rem;font-weight:700;color:var(--accent-orange);">＋ Custom Font</div>
-                    <div style="font-size:0.7rem;color:var(--text-muted);" id="customFontName">AJ 02 (.ttf) တင်ရန်</div>
-                    <input type="file" id="customFontInput" accept=".ttf,.otf" style="display:none">
-                </div>
-            </div>
-
-            <div style="font-size:0.82rem;font-weight:700;margin-top:8px;">စာလုံးအရောင်</div>
-            <div class="color-row">
-                <div class="c-swatch" style="background:#FFFFFF;color:#000;" onclick="pickSubColor('#FFFFFF', this)"></div>
-                <div class="c-swatch" style="background:#FFE600;color:#000;" onclick="pickSubColor('#FFE600', this)"></div>
-                <div class="c-swatch active" style="background:#38BDF8;color:#000;" onclick="pickSubColor('#38BDF8', this)">✓</div>
-                <div class="c-swatch" style="background:#F472B6;color:#000;" onclick="pickSubColor('#F472B6', this)"></div>
-            </div>
-
-            <div class="slider-group">
-                <div class="slider-head"><span>စာလုံးအရွယ်</span><span id="subScaleTxt">90%</span></div>
-                <input type="range" class="full-slider" id="subScaleSlider" min="60" max="140" value="90" oninput="document.getElementById('subScaleTxt').innerText=this.value+'%'">
-            </div>
-
-            <button class="btn-secondary" onclick="resetSubPos()">စာတန်းနေရာ မူလအတိုင်း ပြန်ထားမယ်</button>
-
-            <hr style="border:none;border-top:1px solid #E2E8F0;margin:10px 0;">
-
-            <!-- CHANNEL WATERMARK -->
-            <div class="blur-item">
-                <span style="font-weight:700;font-size:0.88rem;">Channel Watermark ထည့်မယ်</span>
-                <label class="switch">
-                    <input type="checkbox" id="wmChk" checked>
-                    <span class="slider-pill orange"></span>
-                </label>
-            </div>
-            <input type="text" id="wmTextInput" value="MY RECAP" placeholder="Channel အမည်" style="width:100%;padding:8px 10px;border-radius:10px;border:1px solid #CBD5E1;font-weight:700;margin-bottom:8px;">
-
-            <div class="slider-group">
-                <div class="slider-head"><span>Opacity</span><span id="wmOpTxt">50%</span></div>
-                <input type="range" class="full-slider" id="wmOpSlider" min="10" max="100" value="50" oninput="document.getElementById('wmOpTxt').innerText=this.value+'%'">
-            </div>
-            <div class="slider-group">
-                <div class="slider-head"><span>စာလုံးအရွယ်</span><span id="wmSzTxt">95%</span></div>
-                <input type="range" class="full-slider" id="wmSzSlider" min="50" max="150" value="95" oninput="document.getElementById('wmSzTxt').innerText=this.value+'%'">
-            </div>
-
-            <hr style="border:none;border-top:1px solid #E2E8F0;margin:10px 0;">
-
-            <!-- COPYRIGHT FILTERS -->
-            <div class="slider-group">
-                <div class="slider-head"><span>Zoom</span><span id="zoomTxt">100%</span></div>
-                <input type="range" class="full-slider" id="zoomSlider" min="80" max="135" value="100" oninput="document.getElementById('zoomTxt').innerText=this.value+'%'">
-            </div>
-            <div class="slider-group">
-                <div class="slider-head"><span>အလင်း (Brightness)</span><span id="brightTxt">1.00</span></div>
-                <input type="range" class="full-slider" id="brightSlider" min="0.6" max="1.4" step="0.05" value="1.0" oninput="document.getElementById('brightTxt').innerText=parseFloat(this.value).toFixed(2)">
-            </div>
-            <div class="slider-group">
-                <div class="slider-head"><span>Contrast</span><span id="contTxt">1.00</span></div>
-                <input type="range" class="full-slider" id="contSlider" min="0.7" max="1.4" step="0.05" value="1.0" oninput="document.getElementById('contTxt').innerText=parseFloat(this.value).toFixed(2)">
-            </div>
-            <div class="slider-group">
-                <div class="slider-head"><span>အရောင် (Saturation)</span><span id="satTxt">1.00</span></div>
-                <input type="range" class="full-slider" id="satSlider" min="0.5" max="1.6" step="0.05" value="1.0" oninput="document.getElementById('satTxt').innerText=parseFloat(this.value).toFixed(2)">
-            </div>
-            <div class="slider-group">
-                <div class="slider-head"><span>မူရင်းအသံ</span><span id="origVolTxt">0%</span></div>
-                <input type="range" class="full-slider" id="origVolSlider" min="0" max="100" value="0" oninput="document.getElementById('origVolTxt').innerText=this.value+'%'">
-            </div>
-            <div class="slider-group">
-                <div class="slider-head"><span>Voiceover အသံ</span><span id="voVolTxt">100%</span></div>
-                <input type="range" class="full-slider" id="voVolSlider" min="20" max="100" value="100" oninput="document.getElementById('voVolTxt').innerText=this.value+'%'">
-            </div>
-            <button class="btn-secondary" onclick="resetVisualFilters()">Reset</button>
-        </div>
-
-        <!-- STEP 4: ထုတ်ယူမယ် -->
-        <div class="card">
-            <div class="step-head">
-                <div class="step-num">4</div>
-                <div class="step-title">ထုတ်ယူမယ်</div>
-            </div>
-
-            <button class="btn-secondary" onclick="downloadSRTFile()">📄 မြန်မာ SRT Download</button>
-            <button class="btn-primary" id="renderFinalBtn" onclick="startSmoothLocalRender()">📥 Recap Video ထုတ်မယ်</button>
-            <div class="status-banner" id="renderStatusBanner"></div>
-
-            <div id="outputVideoWrap" style="display:none;margin-top:12px;">
-                <video id="finalOutputPreview" controls playsinline style="width:100%;border-radius:12px;background:#000;"></video>
-                <a id="finalDownloadAnchor" class="btn-primary" style="margin-top:8px;text-decoration:none;display:flex;">📥 MP4 Download</a>
-            </div>
-        </div>
-
-    </div><!-- END SCROLLABLE TOOLS PANE -->
-
-</div><!-- END SPLIT LAYOUT -->
-
-<script>
-const canvas = document.getElementById('mainCanvas');
-const ctx = canvas.getContext('2d');
-const playBtn = document.getElementById('playBtn');
-const seekBar = document.getElementById('seekBar');
-const timeLabel = document.getElementById('timeLabel');
-
-const video = document.createElement('video');
-video.playsInline = true;
-video.crossOrigin = 'anonymous';
-
-let currentVideoFile = null;
-let bgImage = null;
-let narrationStyle = 'direct';
-let selectedVoiceIdx = 4;
-let selectedFontFamily = 'Noto Sans Myanmar';
-let selectedSubColor = '#38BDF8';
-let isRecording = false;
-let showHandles = true;
-let handlesTimer = null;
-
-let segments = [
-    {{ start: 0.0, end: 3.5, text: "ပြန်စရာအိမ်မရှိတော့တဲ့" }},
-    {{ start: 3.5, end: 7.5, text: "ဇနီးမောင်နှံနှစ်ယောက်က မြို့ပေါ်က သားငယ်ဆီမှာ" }}
-];
-
-let synthesizedAudioMap = {{}};
-let activeSpeechAudio = new Audio();
-
-// Video သည် အလယ်တွင် ပုံသေ (Fixed) ဖြစ်ပြီး Blur 1, Blur 2, Subtitle, Watermark သာ ရွှေ့နိုင်မည်
-let boxes = {{
-    blur1: {{ x: 0.06, y: 0.72, w: 0.88, h: 0.11, color: '#00E5FF' }},
-    blur2: {{ x: 0.06, y: 0.06, w: 0.38, h: 0.08, color: '#D946EF' }},
-    sub:   {{ x: 0.50, y: 0.775 }},
-    wm:    {{ x: 0.80, y: 0.06 }}
-}};
-
-window.addEventListener('DOMContentLoaded', () => {{
-    const savedGroq = localStorage.getItem('s99_groq_key');
-    const savedGemini = localStorage.getItem('s99_gemini_key');
-    if (savedGroq && !document.getElementById('groqKeyInput').value) document.getElementById('groqKeyInput').value = savedGroq;
-    if (savedGemini && !document.getElementById('geminiKeyInput').value) document.getElementById('geminiKeyInput').value = savedGemini;
-    renderSegmentsUI();
-}});
-
-function toggleApiModal() {{
-    const el = document.getElementById('apiModal');
-    el.style.display = el.style.display === 'none' ? 'block' : 'none';
-}}
-
-function saveKeysToLocal() {{
-    localStorage.setItem('s99_groq_key', document.getElementById('groqKeyInput').value.trim());
-    localStorage.setItem('s99_gemini_key', document.getElementById('geminiKeyInput').value.trim());
-    document.getElementById('apiModal').style.display = 'none';
-}}
-
-function wakeHandles() {{
-    showHandles = true;
-    if (handlesTimer) clearTimeout(handlesTimer);
-    handlesTimer = setTimeout(() => {{ if (!activeDrag) showHandles = false; }}, 3000);
-}}
-
-// ==================== GALLERY VIDEO & CUSTOM FONT LOAD ====================
-document.getElementById('galleryVideoInput').addEventListener('change', function(e) {{
-    const file = e.target.files[0];
-    if (!file) return;
-    currentVideoFile = file;
-    video.src = URL.createObjectURL(file);
-    video.load();
-    video.onloadedmetadata = () => {{
-        seekBar.max = video.duration || 100;
-        video.currentTime = Math.min(0.5, (video.duration || 1) * 0.05);
-        wakeHandles();
-    }};
-}});
-
-document.getElementById('bgFileInput').addEventListener('change', function(e) {{
-    const file = e.target.files[0];
-    if (!file) return;
-    const img = new Image();
-    img.onload = () => {{ bgImage = img; }};
-    img.src = URL.createObjectURL(file);
-}});
-
-document.getElementById('customFontInput').addEventListener('change', async function(e) {{
-    const file = e.target.files[0];
-    if (!file) return;
-    const buf = await file.arrayBuffer();
-    const fontFace = new FontFace('UserCustomFont', buf);
-    await fontFace.load();
-    document.fonts.add(fontFace);
-    selectedFontFamily = 'UserCustomFont';
-    document.getElementById('customFontName').innerText = file.name;
-    document.querySelectorAll('.font-card').forEach(c => c.classList.remove('active'));
-    e.target.parentElement.classList.add('active');
-}});
-
-// ==================== PLAYER CONTROLS ====================
-playBtn.addEventListener('click', () => {{
-    if (!video.src) {{
-        document.getElementById('galleryVideoInput').click();
-        return;
-    }}
-    if (video.paused) {{
-        video.play();
-        playBtn.innerText = '⏸';
-    }} else {{
-        video.pause();
-        activeSpeechAudio.pause();
-        playBtn.innerText = '▶';
-    }}
-}});
-
-seekBar.addEventListener('input', () => {{
-    video.currentTime = parseFloat(seekBar.value);
-}});
-
-video.addEventListener('timeupdate', () => {{
-    if (!seekBar.matches(':active')) seekBar.value = video.currentTime;
-    timeLabel.innerText = `${{fmtTime(video.currentTime)}} / ${{fmtTime(video.duration || 0)}}`;
-    syncVoiceoverPlayback(video.currentTime);
-}});
-
-function fmtTime(s) {{
-    s = Math.max(0, s || 0);
-    const m = Math.floor(s / 60);
-    const sec = Math.floor(s % 60);
-    return `${{m}}:${{sec < 10 ? '0' : ''}}${{sec}}`;
-}}
-
-// ==================== TOUCH DRAG (BLUR, SUBTITLE, WATERMARK ONLY — VIDEO LOCKED) ====================
-let activeDrag = null;
-let dragMode = null;
-let startPt = {{ x: 0, y: 0 }};
-let origBox = null;
-
-function getNormPt(e) {{
-    const r = canvas.getBoundingClientRect();
-    const cx = e.touches ? e.touches[0].clientX : e.clientX;
-    const cy = e.touches ? e.touches[0].clientY : e.clientY;
-    return {{ x: (cx - r.left) / r.width, y: (cy - r.top) / r.height }};
-}}
-
-function hitTestCanvas(pt) {{
-    if (document.getElementById('showSubChk').checked) {{
-        if (Math.abs(pt.x - boxes.sub.x) < 0.36 && Math.abs(pt.y - boxes.sub.y) < 0.055) return {{ key: 'sub', mode: 'move' }};
-    }}
-    if (document.getElementById('wmChk').checked) {{
-        if (Math.abs(pt.x - boxes.wm.x) < 0.18 && Math.abs(pt.y - boxes.wm.y) < 0.05) return {{ key: 'wm', mode: 'move' }};
-    }}
-    const checkRect = (b) => {{
-        const rx = b.x + b.w, ry = b.y + b.h;
-        if (Math.abs(pt.x - rx) < 0.075 && Math.abs(pt.y - ry) < 0.065) return 'resize';
-        if (pt.x >= b.x && pt.x <= rx && pt.y >= b.y && pt.y <= ry) return 'move';
-        return null;
-    }};
-    if (document.getElementById('blur2Chk').checked) {{
-        const m2 = checkRect(boxes.blur2);
-        if (m2) return {{ key: 'blur2', mode: m2 }};
-    }}
-    if (document.getElementById('blur1Chk').checked) {{
-        const m1 = checkRect(boxes.blur1);
-        if (m1) return {{ key: 'blur1', mode: m1 }};
-    }}
-    // Video ကို ရွှေ့လို့မရအောင် null ပြန်ပေးထားသည်
-    return null;
-}}
-
-function handleDown(e) {{
-    wakeHandles();
-    const pt = getNormPt(e);
-    const hit = hitTestCanvas(pt);
-    if (hit) {{
-        e.preventDefault();
-        activeDrag = hit.key;
-        dragMode = hit.mode;
-        startPt = pt;
-        origBox = {{ ...boxes[activeDrag] }};
-    }}
-}}
-
-function handleMove(e) {{
-    if (!activeDrag) return;
-    e.preventDefault();
-    wakeHandles();
-    const pt = getNormPt(e);
-    const dx = pt.x - startPt.x;
-    const dy = pt.y - startPt.y;
-
-    if (activeDrag === 'sub' || activeDrag === 'wm') {{
-        boxes[activeDrag].x = Math.min(0.92, Math.max(0.08, origBox.x + dx));
-        boxes[activeDrag].y = Math.min(0.95, Math.max(0.04, origBox.y + dy));
-    }} else {{
-        if (dragMode === 'move') {{
-            boxes[activeDrag].x = Math.min(1.0 - origBox.w, Math.max(0.0, origBox.x + dx));
-            boxes[activeDrag].y = Math.min(1.0 - origBox.h, Math.max(0.0, origBox.y + dy));
-        }} else {{
-            boxes[activeDrag].w = Math.min(1.0 - origBox.x, Math.max(0.12, origBox.w + dx));
-            boxes[activeDrag].h = Math.min(1.0 - origBox.y, Math.max(0.04, origBox.h + dy));
-        }}
-    }}
-}}
-
-function handleUp() {{ activeDrag = null; dragMode = null; }}
-
-canvas.addEventListener('mousedown', handleDown);
-window.addEventListener('mousemove', handleMove);
-window.addEventListener('mouseup', handleUp);
-canvas.addEventListener('touchstart', handleDown, {{ passive: false }});
-window.addEventListener('touchmove', handleMove, {{ passive: false }});
-window.addEventListener('touchend', handleUp);
-
-// ==================== 60FPS SMOOTH CANVAS RENDER LOOP ====================
-function cleanMyanmarText(txt) {{
-    if (!txt) return "";
-    return txt.replace(/[\u200b\u200c\u200d\ufeff]/g, "").trim();
-}}
-
-function drawFrame() {{
-    const cw = canvas.width, ch = canvas.height;
-    ctx.clearRect(0, 0, cw, ch);
-
-    if (bgImage) {{
-        ctx.drawImage(bgImage, 0, 0, cw, ch);
-    }} else {{
-        ctx.fillStyle = '#090D16';
-        ctx.fillRect(0, 0, cw, ch);
-    }}
-
-    const bright = parseFloat(document.getElementById('brightSlider').value);
-    const cont = parseFloat(document.getElementById('contSlider').value);
-    const sat = parseFloat(document.getElementById('satSlider').value);
-
-    // Video ကို အလယ်တည့်တည့်တွင် ပုံသေ (Fixed Center) ဆွဲပေးခြင်း
-    if (video.readyState >= 2) {{
-        const vw = video.videoWidth || 720, vh = video.videoHeight || 1280;
-        const zm = parseFloat(document.getElementById('zoomSlider').value) / 100.0;
-        const sc = Math.min(cw / vw, ch / vh) * zm;
-        const dw = vw * sc, dh = vh * sc;
-        const dx = (cw - dw) / 2;
-        const dy = (ch - dh) / 2;
-
-        ctx.save();
-        ctx.filter = `brightness(${{bright}}) contrast(${{cont}}) saturate(${{sat}})`;
-        if (document.getElementById('mirrorChk').checked) {{
-            ctx.translate(cw, 0);
-            ctx.scale(-1, 1);
-            ctx.drawImage(video, cw - dx - dw, dy, dw, dh);
-        }} else {{
-            ctx.drawImage(video, dx, dy, dw, dh);
-        }}
-        ctx.restore();
-    }} else {{
-        ctx.fillStyle = '#94A3B8';
-        ctx.font = '700 22px "Noto Sans Myanmar", sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText('▶ Gallery မှ ဗီဒီယိုရွေးပါ', cw / 2, ch / 2);
-    }}
-
-    // BLUR MASKS
-    const blurOp = parseInt(document.getElementById('blurOpacity').value) / 100.0;
-    const renderBlurBox = (b, enabled) => {{
-        if (!enabled || blurOp <= 0) return;
-        const bx = b.x * cw, by = b.y * ch, bw = b.w * cw, bh = b.h * ch;
-        ctx.save();
-        ctx.beginPath();
-        ctx.roundRect(bx, by, bw, bh, 12);
-        ctx.clip();
-        ctx.filter = `blur(${{Math.max(4, Math.round(20 * blurOp))}}px)`;
-        ctx.drawImage(canvas, 0, 0);
-        ctx.filter = 'none';
-        ctx.fillStyle = `rgba(20, 20, 20, ${{0.42 * blurOp}})`;
-        ctx.fillRect(bx, by, bw, bh);
-        ctx.restore();
-
-        if (showHandles && !isRecording) {{
-            ctx.save();
-            ctx.strokeStyle = b.color;
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            ctx.roundRect(bx, by, bw, bh, 12);
-            ctx.stroke();
-            ctx.fillStyle = b.color;
-            ctx.beginPath();
-            ctx.arc(bx + bw, by + bh, 10, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.restore();
-        }}
-    }};
-    renderBlurBox(boxes.blur1, document.getElementById('blur1Chk').checked);
-    renderBlurBox(boxes.blur2, document.getElementById('blur2Chk').checked);
-
-    // WATERMARK
-    if (document.getElementById('wmChk').checked) {{
-        const wmTxt = document.getElementById('wmTextInput').value.trim();
-        const wmOp = parseInt(document.getElementById('wmOpSlider').value) / 100.0;
-        const wmSz = Math.round(22 * (parseInt(document.getElementById('wmSzSlider').value) / 100.0) * (cw / 540.0));
-        if (wmTxt) {{
-            ctx.save();
-            ctx.font = `700 ${{wmSz}}px "${{selectedFontFamily}}", sans-serif`;
-            ctx.fillStyle = `rgba(255, 255, 255, ${{wmOp}})`;
-            ctx.textAlign = 'center';
-            ctx.fillText(wmTxt, boxes.wm.x * cw, boxes.wm.y * ch);
-            ctx.restore();
-        }}
-    }}
-
-    // SUBTITLES
-    if (document.getElementById('showSubChk').checked) {{
-        const offset = parseFloat(document.getElementById('audioOffsetSlider').value) || 0;
-        const t = (video.currentTime || 0) - offset;
-        let subLine = "";
-        for (let i = 0; i < segments.length; i++) {{
-            if (t >= segments[i].start && t <= segments[i].end) {{
-                subLine = cleanMyanmarText(segments[i].text);
-                break;
-            }}
-        }}
-        if (!subLine && video.paused && segments.length > 0) subLine = cleanMyanmarText(segments[0].text);
-
-        if (subLine) {{
-            const scalePct = parseInt(document.getElementById('subScaleSlider').value) / 100.0;
-            const fontPx = Math.round(25 * scalePct * (cw / 540.0));
-            ctx.save();
-            ctx.font = `700 ${{fontPx}}px "${{selectedFontFamily}}", "Noto Sans Myanmar", sans-serif`;
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-
-            const sx = boxes.sub.x * cw, sy = boxes.sub.y * ch;
-            const tw = Math.min(cw * 0.9, ctx.measureText(subLine).width);
-            const th = fontPx * 1.45;
-
-            ctx.fillStyle = 'rgba(18, 18, 18, 0.72)';
-            ctx.strokeStyle = 'rgba(255, 255, 255, 0.2)';
-            ctx.lineWidth = 1.5;
-            ctx.beginPath();
-            ctx.roundRect(sx - tw / 2 - 18, sy - th / 2 - 4, tw + 36, th + 8, 12);
-            ctx.fill();
-            ctx.stroke();
-
-            ctx.lineWidth = Math.max(3.5, fontPx * 0.16);
-            ctx.strokeStyle = '#000000';
-            ctx.strokeText(subLine, sx, sy);
-            ctx.fillStyle = selectedSubColor;
-            ctx.fillText(subLine, sx, sy);
-            ctx.restore();
-        }}
-    }}
-
-    requestAnimationFrame(drawFrame);
-}}
-requestAnimationFrame(drawFrame);
-
-// ==================== UI HELPERS ====================
-function changeRatio(r, el) {{
-    document.querySelectorAll('.r-btn').forEach(b => b.classList.remove('active'));
-    el.classList.add('active');
-    if (r === '9:16') {{ canvas.width = 540; canvas.height = 960; }}
-    else if (r === '16:9') {{ canvas.width = 854; canvas.height = 480; }}
-    else if (r === '1:1') {{ canvas.width = 640; canvas.height = 640; }}
-    else if (r === '4:3') {{ canvas.width = 640; canvas.height = 480; }}
-    wakeHandles();
-}}
-
-function resetBlur1() {{ boxes.blur1 = {{ x: 0.06, y: 0.72, w: 0.88, h: 0.11, color: '#00E5FF' }}; wakeHandles(); }}
-function clearAllBlurs() {{ document.getElementById('blur1Chk').checked = false; document.getElementById('blur2Chk').checked = false; }}
-function resetSubPos() {{ boxes.sub = {{ x: 0.50, y: 0.775 }}; wakeHandles(); }}
-function resetVisualFilters() {{
-    document.getElementById('zoomSlider').value = 100; document.getElementById('zoomTxt').innerText = '100%';
-    document.getElementById('brightSlider').value = 1.0; document.getElementById('brightTxt').innerText = '1.00';
-    document.getElementById('contSlider').value = 1.0; document.getElementById('contTxt').innerText = '1.00';
-    document.getElementById('satSlider').value = 1.0; document.getElementById('satTxt').innerText = '1.00';
-}}
-
-function selectNarration(mode, el) {{
-    narrationStyle = mode;
-    document.querySelectorAll('.select-card').forEach(c => c.classList.remove('active'));
-    el.classList.add('active');
-}}
-
-function selectVoice(idx, el) {{
-    selectedVoiceIdx = idx;
-    document.querySelectorAll('.voice-row').forEach(r => r.classList.remove('active'));
-    el.classList.add('active');
-}}
-
-function selectFont(fam, el) {{
-    selectedFontFamily = fam;
-    document.querySelectorAll('.font-card').forEach(c => c.classList.remove('active'));
-    el.classList.add('active');
-}}
-
-function pickSubColor(clr, el) {{
-    selectedSubColor = clr;
-    document.querySelectorAll('.c-swatch').forEach(s => {{ s.classList.remove('active'); s.innerText = ''; }});
-    el.classList.add('active');
-    el.innerText = '✓';
-}}
-
-function renderSegmentsUI() {{
-    const wrap = document.getElementById('segmentsContainer');
-    document.getElementById('segCountLabel').innerText = `စာကြောင်း: ${{segments.length}} | ပြင်ချင်တာ ပြင်နိုင်ပါတယ်`;
-    wrap.innerHTML = '';
-    segments.forEach((seg, idx) => {{
-        const div = document.createElement('div');
-        div.className = 'seg-box';
-        div.innerHTML = `
-            <div class="seg-top">
-                <span class="seg-time">${{fmtTime(seg.start)}} - ${{fmtTime(seg.end)}}</span>
-                <button class="seg-del" onclick="deleteSeg(${{idx}})">🗑️</button>
-            </div>
-            <textarea class="seg-input" rows="2" oninput="segments[${{idx}}].text=this.value">${{seg.text}}</textarea>
-        `;
-        wrap.appendChild(div);
-    }});
-}}
-
-function deleteSeg(idx) {{ segments.splice(idx, 1); renderSegmentsUI(); }}
-function addBlankSegment() {{
-    const lastEnd = segments.length > 0 ? segments[segments.length - 1].end : 0;
-    segments.push({{ start: lastEnd, end: lastEnd + 3.0, text: "စာကြောင်းအသစ်" }});
-    renderSegmentsUI();
-}}
-
-// ==================== CLIENT-SIDE AUDIO EXTRACTOR & AI TRANSLATION ====================
-async function extractWavBlobFromVideoFile(file) {{
-    const arrayBuf = await file.arrayBuffer();
-    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    const decoded = await audioCtx.decodeAudioData(arrayBuf);
-    const offlineCtx = new OfflineAudioContext(1, Math.floor(decoded.duration * 16000), 16000);
-    const source = offlineCtx.createBufferSource();
-    source.buffer = decoded;
-    source.connect(offlineCtx.destination);
-    source.start(0);
-    const rendered = await offlineCtx.startRendering();
-    const pcm = rendered.getChannelData(0);
-
-    const wavBuf = new ArrayBuffer(44 + pcm.length * 2);
-    const view = new DataView(wavBuf);
-    const writeStr = (off, s) => {{ for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); }};
-    writeStr(0, 'RIFF'); view.setUint32(4, 36 + pcm.length * 2, true); writeStr(8, 'WAVE');
-    writeStr(12, 'fmt '); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, 16000, true); view.setUint32(28, 32000, true);
-    view.setUint16(32, 2, true); view.setUint16(34, 16, true); writeStr(36, 'data');
-    view.setUint32(40, pcm.length * 2, true);
-    let offset = 44;
-    for (let i = 0; i < pcm.length; i++, offset += 2) {{
-        let s = Math.max(-1, Math.min(1, pcm[i]));
-        view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
-    }}
-    return new Blob([wavBuf], {{ type: 'audio/wav' }});
-}}
-
-async function generateScriptFromLocalVideo() {{
-    const groqKey = document.getElementById('groqKeyInput').value.trim();
-    const geminiKey = document.getElementById('geminiKeyInput').value.trim();
-    const statusEl = document.getElementById('scriptStatus');
-
-    if (!currentVideoFile) {{ alert("ကျေးဇူးပြု၍ အပေါ်ဆုံးမှ Gallery ဗီဒီယို အရင်ရွေးပေးပါ။"); return; }}
-    if (!groqKey || !geminiKey) {{ toggleApiModal(); alert("Groq နှင့် Gemini API Key ထည့်သွင်းပေးပါ။"); return; }}
-
-    statusEl.style.display = 'block';
-    statusEl.innerText = "⏳ ၁/၂ - ဗီဒီယိုထဲမှ အသံကို ဆွဲထုတ်ပြီး Groq Whisper ဖြင့် နားထောင်နေပါသည်...";
-
-    try {{
-        const wavBlob = await extractWavBlobFromVideoFile(currentVideoFile);
-        const formData = new FormData();
-        formData.append('file', wavBlob, 'audio.wav');
-        formData.append('model', 'whisper-large-v3-turbo');
-        formData.append('response_format', 'verbose_json');
-
-        const wResp = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {{
-            method: 'POST',
-            headers: {{ 'Authorization': 'Bearer ' + groqKey }},
-            body: formData
-        }});
-        const wData = await wResp.json();
-        if (!wData.segments || wData.segments.length === 0) throw new Error("စကားပြောသံ မတွေ့ရှိပါ။");
-
-        statusEl.innerText = `⏳ ၂/၂ - စာကြောင်း (${{wData.segments.length}}) ကြောင်းကို Gemini 3.5 ဖြင့် မြန်မာဘာသာပြန်နေပါသည်...`;
-
-        let stylePrompt = "Translate directly and naturally into spoken Burmese (Myanmar) keeping original POV.";
-        if (narrationStyle === 'third') stylePrompt = "Rewrite and translate into natural Burmese (Myanmar) as a Third-Person movie recap narrator.";
-        if (narrationStyle === 'first') stylePrompt = "Rewrite and translate into natural Burmese (Myanmar) from a First-Person main character perspective.";
-
-        const payload = wData.segments.map((s, idx) => ({{ id: idx, text: s.text }}));
-        const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${{geminiKey}}`;
-        const gResp = await fetch(gUrl, {{
-            method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify({{
-                contents: [{{ parts: [{{ text: `${{stylePrompt}}\nReturn ONLY a valid JSON array of objects with 'id' and 'translation':\n${{JSON.stringify(payload)}}` }}] }}],
-                generationConfig: {{ responseMimeType: "application/json" }}
-            }})
-        }});
-
-        let transMap = {{}};
-        if (gResp.ok) {{
-            const gJson = await gResp.json();
-            const parsed = JSON.parse(gJson.candidates[0].content.parts[0].text);
-            parsed.forEach(item => {{ transMap[item.id] = item.translation; }});
-        }} else {{
-            const bResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {{
-                method: 'POST',
-                headers: {{ 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [{{ role: 'user', content: `${{stylePrompt}}\nReturn JSON object with key 'items' containing array of 'id' and 'translation':\n${{JSON.stringify(payload)}}` }}],
-                    response_format: {{ type: 'json_object' }}
-                }})
-            }});
-            const bJson = await bResp.json();
-            const parsed = JSON.parse(bJson.choices[0].message.content).items || [];
-            parsed.forEach(item => {{ transMap[item.id] = item.translation; }});
-        }}
-
-        segments = wData.segments.map((s, idx) => ({{
-            start: parseFloat(s.start.toFixed(2)),
-            end: parseFloat(s.end.toFixed(2)),
-            text: cleanMyanmarText(transMap[idx] || s.text)
-        }}));
-
-        renderSegmentsUI();
-        statusEl.innerText = "✅ မြန်မာဘာသာပြန် Script အောင်မြင်စွာ ထုတ်ပြီးပါပြီ!";
-    }} catch (err) {{
-        statusEl.innerText = "❌ Error: " + err.message;
-    }}
-}}
-
-// ==================== VOICEOVER TTS ENGINE ====================
-const voiceConfigs = [
-    {{ pitch: 1.0, rate: 0.95 }},
-    {{ pitch: 1.15, rate: 1.05 }},
-    {{ pitch: 1.25, rate: 1.02 }},
-    {{ pitch: 0.92, rate: 1.08 }},
-    {{ pitch: 0.82, rate: 0.96 }},
-    {{ pitch: 0.98, rate: 1.14 }}
-];
-
-function previewVoice(idx) {{
-    const sampleUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${{encodeURIComponent("မင်္ဂလာပါရှင်၊ အသံနမူနာဖြစ်ပါတယ်")}}&tl=my&client=tw-ob`;
-    const aud = new Audio(sampleUrl);
-    aud.playbackRate = voiceConfigs[idx].rate;
-    aud.play().catch(() => {{}});
-}}
-
-async function generateVoiceoverAudio() {{
-    const voStatus = document.getElementById('voStatus');
-    voStatus.style.display = 'block';
-    voStatus.innerText = "⏳ Voiceover အသံများ ဖန်တီးနေပါသည်...";
-    synthesizedAudioMap = {{}};
-
-    for (let i = 0; i < segments.length; i++) {{
-        const txt = segments[i].text.trim();
-        if (!txt) continue;
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${{encodeURIComponent(txt.slice(0, 180))}}&tl=my&client=tw-ob`;
-        synthesizedAudioMap[i] = url;
-    }}
-    voStatus.innerText = "✓ Voiceover ရပါပြီ — အပေါ်က Video ကို Play နှိပ်ပြီး နားထောင်ကြည့်ပါ။";
-}}
-
-let lastPlayedSegIdx = -1;
-function syncVoiceoverPlayback(curTime) {{
-    if (video.paused) return;
-    video.volume = parseInt(document.getElementById('origVolSlider').value) / 100.0;
-    const offset = parseFloat(document.getElementById('audioOffsetSlider').value) || 0;
-    const adjTime = curTime - offset;
-
-    let foundIdx = -1;
-    for (let i = 0; i < segments.length; i++) {{
-        if (adjTime >= segments[i].start && adjTime <= segments[i].end) {{
-            foundIdx = i;
-            break;
-        }}
-    }}
-    if (foundIdx !== -1 && foundIdx !== lastPlayedSegIdx && synthesizedAudioMap[foundIdx]) {{
-        lastPlayedSegIdx = foundIdx;
-        activeSpeechAudio.src = synthesizedAudioMap[foundIdx];
-        activeSpeechAudio.volume = parseInt(document.getElementById('voVolSlider').value) / 100.0;
-        activeSpeechAudio.playbackRate = voiceConfigs[selectedVoiceIdx].rate;
-        activeSpeechAudio.play().catch(() => {{}});
-    }} else if (foundIdx === -1) {{
-        lastPlayedSegIdx = -1;
-    }}
-}}
-
-// ==================== SRT DOWNLOAD & SMOOTH LOCAL RENDER ====================
-function downloadSRTFile() {{
-    const fmtSrt = (s) => {{
-        const hrs = Math.floor(s / 3600);
-        const mins = Math.floor((s % 3600) / 60);
-        const secs = Math.floor(s % 60);
-        const ms = Math.round((s - Math.floor(s)) * 1000);
-        return `${{String(hrs).padStart(2,'0')}}:${{String(mins).padStart(2,'0')}}:${{String(secs).padStart(2,'0')}},${{String(ms).padStart(3,'0')}}`;
-    }};
-    let srt = "";
-    segments.forEach((seg, i) => {{
-        srt += `${{i + 1}}\n${{fmtSrt(seg.start)}} --> ${{fmtSrt(seg.end)}}\n${{seg.text}}\n\n`;
-    }});
-    const blob = new Blob([srt], {{ type: 'text/plain;charset=utf-8' }});
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = "RecapMM_Subtitle.srt";
-    a.click();
-}}
-
-function startSmoothLocalRender() {{
-    if (!video.src) {{ alert("ကျေးဇူးပြု၍ Gallery မှ ဗီဒီယို အရင်ရွေးပေးပါ။"); return; }}
-    const banner = document.getElementById('renderStatusBanner');
-    const outWrap = document.getElementById('outputVideoWrap');
-    const outVid = document.getElementById('finalOutputPreview');
-    const dlAnchor = document.getElementById('finalDownloadAnchor');
-
-    banner.style.display = 'block';
-    outWrap.style.display = 'none';
-    banner.innerText = "⏳ Local Video Render ဖမ်းယူနေပါသည် (Video ပြီးဆုံးသည်အထိ ခဏစောင့်ပေးပါ)...";
-
-    isRecording = true;
-    showHandles = false;
-    const chunks = [];
-    const stream = canvas.captureStream(30);
-
-    const mime = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm;codecs=vp8';
-    const recorder = new MediaRecorder(stream, {{ mimeType: mime, videoBitsPerSecond: 1800000 }});
-
-    recorder.ondataavailable = (e) => {{ if (e.data && e.data.size > 0) chunks.push(e.data); }};
-    recorder.onstop = () => {{
-        isRecording = false;
-        const blob = new Blob(chunks, {{ type: mime }});
-        const mb = (blob.size / (1024 * 1024)).toFixed(1);
-        const url = URL.createObjectURL(blob);
-        outVid.src = url;
-        dlAnchor.href = url;
-        dlAnchor.download = mime.includes('mp4') ? `RecapMM_${{mb}}MB.mp4` : `RecapMM_${{mb}}MB.webm`;
-        dlAnchor.innerText = `📥 MP4 Download (${{mb}} MB)`;
-        banner.innerText = `✅ အောင်မြင်စွာ ပြီးဆုံးပါပြီ! (ဖိုင်ဆိုဒ်: ${{mb}} MB)`;
-        outWrap.style.display = 'block';
-    }};
-
-    video.currentTime = 0;
-    video.play();
-    recorder.start(200);
-
-    video.onended = () => {{
-        if (recorder.state === 'recording') recorder.stop();
-    }};
-}}
-</script>
+    <video id="pvVid" controls playsinline></video>
+    <div class="wm-label">{wm_txt}</div>
+    <div class="blur-box-2"></div>
+    <div class="blur-box-1"></div>
+    <div class="sub-pill">ပြန်စရာအိမ်မရှိတော့တဲ့ ဇနီးမောင်နှံ</div>
+</div>
 </body>
 </html>
 """
 
-components.html(APP_HTML, height=900, scrolling=False)
+# ==================== TOP BAR ====================
+st.markdown("""
+<div class="topbar">
+    <div class="brand-logo">Recap<span>MM</span> • Studio99</div>
+    <div class="badge-916">📐 9:16 Portrait Studio</div>
+</div>
+""", unsafe_allow_html=True)
+
+default_groq = st.secrets.get("GROQ_API_KEY", "") if "GROQ_API_KEY" in st.secrets else ""
+default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
+
+with st.expander("🔑 API Keys နှင့် Custom Font (.ttf) ထည့်သွင်းရန်", expanded=not (default_groq and default_gemini)):
+    groq_key = st.text_input("Groq API Key (gsk_...)", value=default_groq, type="password")
+    gemini_key = st.text_input("Gemini API Key (AIzaSy...)", value=default_gemini, type="password")
+    gemini_model = st.selectbox("Gemini Model", ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"])
+    uploaded_font = st.file_uploader("📁 AJ 02 (.ttf) သို့မဟုတ် စိတ်ကြိုက် Font တင်ရန်", type=["ttf", "otf"])
+    custom_font_path = register_uploaded_font(uploaded_font)
+
+# ==================== GALLERY VIDEO PICKER & 9:16 PREVIEW ====================
+with st.container(border=True):
+    uploaded_video = st.file_uploader("🖼️ Gallery မှ ဗီဒီယို ရွေးမည် (MP4 / MOV)", type=["mp4", "mov", "mkv", "webm"])
+    video_temp_path = None
+    if uploaded_video:
+        video_temp_path = os.path.join(tempfile.gettempdir(), "recap_source_916.mp4")
+        with open(video_temp_path, "wb") as f:
+            f.write(uploaded_video.getbuffer())
+
+    st.markdown("##### 🌫️ Blur Mask နှင့် 9:16 မျက်နှာပြင် ချိန်ညှိမှု")
+    b_c1, b_c2 = st.columns(2)
+    enable_blur1 = b_c1.toggle("Blur 1 (အောက်စာတန်း)", value=True)
+    enable_blur2 = b_c2.toggle("Blur 2 (အပေါ် Logo)", value=False)
+
+    s_c1, s_c2, s_c3 = st.columns(3)
+    blur1_y_pct = s_c1.slider("Blur 1 အပေါ်/အောက်", 10, 92, 74, 1)
+    blur1_h_pct = s_c2.slider("Blur 1 အမြင့်", 4, 25, 11, 1)
+    blur_opacity_pct = s_c3.slider("Blur အထူ (%)", 0, 100, 100, 5)
+
+    if enable_blur2:
+        blur2_y_pct = st.slider("Blur 2 (Logo) အပေါ်/အောက် (%)", 2, 50, 6, 1)
+    else:
+        blur2_y_pct = 6
+
+    sub_y_pct = st.slider("📝 မြန်မာစာတန်း အပေါ်/အောက် နေရာ (%)", 10, 92, 78, 1)
+
+    # 9:16 ဒေါင်လိုက် Preview Box ပြသခြင်း
+    pv_html = build_916_preview_component(
+        b1_y=blur1_y_pct,
+        b1_h=blur1_h_pct,
+        b2_on=enable_blur2,
+        b2_y=blur2_y_pct,
+        sub_y=sub_y_pct,
+        sub_clr=COLOR_PRESETS.get(st.session_state.get("clr_state", "🔵 အပြာနု"), "#38BDF8"),
+        wm_txt=st.session_state.get("wm_txt_state", "MY RECAP")
+    )
+    components.html(pv_html, height=455, scrolling=False)
+
+# ==================== STEP 1: မြန်မာဘာသာပြန် SCRIPT (စာကြောင်းပြင်မည် ဖျက်ထားသည်) ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-head">
+        <div class="step-num">1</div>
+        <div class="step-title">မြန်မာဘာသာပြန် Script ပုံစံ</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    narration_label = st.radio("ဇာတ်ကြောင်းပုံစံ ရွေးပါ", list(NARRATION_STYLES.keys()), index=0)
+    style_mode = NARRATION_STYLES[narration_label]
+
+# ==================== STEP 2: VOICEOVER အသံရွေးပါ (SPEED % နှင့် PITCH % ပါဝင်သည်) ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-head">
+        <div class="step-num">2</div>
+        <div class="step-title">Voiceover အသံ နှင့် Speed / Pitch (%)</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    selected_voice_preset = st.radio("အသံအမျိုးအစား (၆ မျိုး)", list(VOICE_PRESETS.keys()), index=4)
+    v_cfg = VOICE_PRESETS[selected_voice_preset]
+
+    sp_col1, sp_col2 = st.columns(2)
+    tts_speed_pct = sp_col1.slider("⚡ TTS အသံ Speed (%)", -50, 100, v_cfg["rate"], 5, format="%d%%")
+    tts_pitch_pct = sp_col2.slider("🎵 TTS အသံ Pitch (%)", -50, 50, v_cfg["pitch"], 2, format="%d%%")
+
+    audio_offset_sec = st.slider("⏱️ အသံ အစော / အနောက် ချိန် (စက္ကန့်)", -2.0, 2.0, 0.0, 0.1)
+
+# ==================== STEP 3: VIDEO ချိန်ညှိမှု ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-head">
+        <div class="step-num">3</div>
+        <div class="step-title">Video ချိန်ညှိမှု</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    m_c1, m_c2 = st.columns(2)
+    mirror_vid = m_c1.toggle("ဘယ်ညာလှည့် (Mirror)", value=False)
+    show_sub = m_c2.toggle("မြန်မာစာတန်း ထည့်မယ်", value=True)
+
+    font_choice = st.selectbox("ဖောင့် ရွေးချယ်ရန်", FONT_CHOICES, index=0)
+    active_font_path = find_font_path(font_choice, custom_font_path)
+
+    color_label = st.radio("စာလုံးအရောင်", list(COLOR_PRESETS.keys()), index=0, horizontal=True, key="clr_state")
+    sub_color_hex = COLOR_PRESETS[color_label]
+    sub_size_pct = st.slider("စာလုံးအရွယ် (%)", 60, 130, 90, 5, format="%d%%")
+
+    st.divider()
+    enable_wm = st.toggle("Channel Watermark ထည့်မယ်", value=True)
+    if enable_wm:
+        wm_text = st.text_input("Channel အမည်", value="MY RECAP", key="wm_txt_state")
+        w_c1, w_c2 = st.columns(2)
+        wm_opacity_pct = w_c1.slider("Watermark Opacity (%)", 10, 100, 55, 5, format="%d%%")
+        wm_size_pct = w_c2.slider("Watermark အရွယ် (%)", 50, 150, 95, 5, format="%d%%")
+    else:
+        wm_text, wm_opacity_pct, wm_size_pct = "", 50, 95
+
+    with st.expander("🎨 Copyright ကာကွယ်ရေး (Zoom / အလင်း / Contrast / အသံ %)", expanded=False):
+        zoom_pct = st.slider("Zoom (%)", 80, 130, 100, 2, format="%d%%")
+        brightness_val = st.slider("အလင်း (Brightness)", -0.3, 0.3, 0.0, 0.02)
+        contrast_val = st.slider("Contrast", 0.7, 1.4, 1.0, 0.05)
+        saturation_val = st.slider("အရောင် (Saturation)", 0.5, 1.5, 1.0, 0.05)
+        orig_vol_pct = st.slider("မူရင်းအသံ (%)", 0, 50, 0, 5, format="%d%%")
+        vo_vol_pct = st.slider("Voiceover အသံ (%)", 50, 200, 120, 10, format="%d%%")
+
+# ==================== STEP 4: ထုတ်ယူမယ် (အဆင့်တိုင်း ဘာလုပ်နေလဲ အသေးစိတ်ပြမည်) ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-head">
+        <div class="step-num">4</div>
+        <div class="step-title">ထုတ်ယူမယ် (Fast 9:16 HD Render)</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    render_btn = st.button("📥 Recap Video ထုတ်မယ်", type="primary", use_container_width=True)
+
+    if render_btn:
+        if not video_temp_path:
+            st.error("ကျေးဇူးပြု၍ အပေါ်ဆုံးရှိ 'Gallery မှ ဗီဒီယို ရွေးမည်' တွင် Video အရင်ရွေးပေးပါ။")
+        elif not groq_key or not gemini_key:
+            st.error("Groq နှင့် Gemini API Key နှစ်ခုလုံး ထည့်သွင်းပေးပါ။")
+        else:
+            step_box = st.empty()
+            p_bar = st.progress(0.0)
+            try:
+                # 9:16 Portrait Resolution (720x1280) အတိအကျ သတ်မှတ်ခြင်း
+                out_w, out_h = 720, 1280
+                _, _, vid_fps, vid_dur = get_video_info(video_temp_path)
+
+                step_box.info("🎧 **အဆင့် ၁/၄ (15%)** - ဗီဒီယိုထဲမှ အသံထုတ်ယူပြီး Groq Whisper AI ဖြင့် စကားပြောချိန်များ နားထောင်နေပါသည်...")
+                p_bar.progress(0.15)
+                extracted_audio = extract_compressed_audio(video_temp_path)
+                groq_client = Groq(api_key=groq_key.strip())
+                with open(extracted_audio, "rb") as f:
+                    trans = groq_client.audio.transcriptions.create(
+                        file=(extracted_audio, f.read()),
+                        model="whisper-large-v3-turbo",
+                        response_format="verbose_json"
+                    )
+                raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
+                segments = merge_close_whisper_segments(raw_segs)
+                if not segments:
+                    raise RuntimeError("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ။")
+
+                step_box.info(f"🤖 **အဆင့် ၂/၄ (40%)** - စာကြောင်း ({len(segments)}) ကြောင်းကို `{gemini_model}` ဖြင့် မြန်မာဘာသာပြန်နေပါသည်...")
+                p_bar.progress(0.40)
+                gemini_client = genai.Client(api_key=gemini_key.strip())
+                translate_segments_recap_style(gemini_client, groq_client, gemini_model, segments, style_mode)
+
+                step_box.info(f"🗣️ **အဆင့် ၃/၄ (65%)** - Edge-TTS ဖြင့် မြန်မာ Voiceover (Speed: {tts_speed_pct:+}%, Pitch: {tts_pitch_pct:+}%) ထုတ်ယူနေပါသည်...")
+                p_bar.progress(0.65)
+                safe_speed = max(-99, min(100, int(tts_speed_pct)))
+                safe_pitch = max(-50, min(50, int(tts_pitch_pct)))
+                tts_res = asyncio.run(
+                    synthesize_all_tts(segments, v_cfg["voice"], f"{safe_speed:+d}%", f"{safe_pitch:+d}Hz")
+                )
+                for idx, wav_p, tdur in tts_res:
+                    segments[idx]["wav"] = wav_p
+                    segments[idx]["tts_dur"] = tdur
+
+                timeline, cursor = [], 0.0
+                for seg in segments:
+                    s_start = max(cursor, seg["start"] + audio_offset_sec)
+                    s_end = max(s_start + 0.1, seg["end"] + audio_offset_sec)
+                    if s_start - cursor > 0.08:
+                        timeline.append({"type": "gap", "v_start": cursor, "v_end": s_start, "target_dur": s_start - cursor})
+                    timeline.append({
+                        "type": "speech", "v_start": s_start, "v_end": s_end,
+                        "target_dur": max(0.25, seg["tts_dur"]), "wav": seg["wav"], "text": seg["translated"]
+                    })
+                    cursor = s_end
+                if vid_dur - cursor > 0.08:
+                    timeline.append({"type": "gap", "v_start": cursor, "v_end": vid_dur, "target_dur": vid_dur - cursor})
+
+                srt_blocks, sub_overlays, srt_counter, new_time_cursor = [], [], 1, 0.0
+                audio_list_file = tempfile.NamedTemporaryFile(delete=False, mode="w", suffix=".txt").name
+                with open(audio_list_file, "w", encoding="utf-8") as af:
+                    for item in timeline:
+                        dur = item["target_dur"]
+                        if item["type"] == "gap":
+                            sil = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                            subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=mono", "-t", f"{dur:.3f}", sil], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            af.write(f"file '{sil}'\n")
+                        else:
+                            af.write(f"file '{item['wav']}'\n")
+                            short_lines = split_into_short_lines(item["text"], 18)
+                            tot_c = sum(len(c) for c in short_lines) or 1
+                            loc_c = 0.0
+                            for c_idx, c_str in enumerate(short_lines):
+                                c_dur = dur * (len(c_str) / tot_c) if c_idx < len(short_lines) - 1 else (dur - loc_c)
+                                st_time = new_time_cursor + loc_c
+                                et_time = st_time + c_dur
+                                srt_blocks.append(f"{srt_counter}\n{format_srt_time(st_time)} --> {format_srt_time(et_time)}\n{c_str}\n")
+                                srt_counter += 1
+                                sub_rgba = render_myanmar_subtitle_rgba(
+                                    c_str, active_font_path, int(sub_size_pct), out_w, sub_color_hex
+                                )
+                                sub_overlays.append({"img": sub_rgba, "start": st_time, "end": et_time})
+                                loc_c += c_dur
+                        new_time_cursor += dur
+
+                srt_content = "\n".join(srt_blocks)
+                combined_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
+                final_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
+                subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", audio_list_file, "-c", "copy", combined_wav], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", combined_wav,
+                    "-af", "loudnorm=I=-14:TP=-1.0:LRA=11,volume=5dB",
+                    "-ar", "44100", "-b:a", "128k", final_audio
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+
+                b1_box = (
+                    int(out_w * 0.06),
+                    min(max(0, int(out_h * (blur1_y_pct / 100.0))), out_h - 32),
+                    int(out_w * 0.88),
+                    max(24, int(out_h * (blur1_h_pct / 100.0)))
+                )
+                b2_box = (
+                    int(out_w * 0.06),
+                    min(max(0, int(out_h * (blur2_y_pct / 100.0))), out_h - 32),
+                    int(out_w * 0.45),
+                    int(out_h * 0.08)
+                )
+
+                wm_rgba = render_watermark_rgba(wm_text, active_font_path, wm_opacity_pct, wm_size_pct, out_w) if enable_wm else None
+
+                out_video_path = render_916_fast_video(
+                    video_path=video_temp_path,
+                    tts_audio_path=final_audio,
+                    timeline=timeline,
+                    sub_overlays=sub_overlays,
+                    out_w=out_w,
+                    out_h=out_h,
+                    vid_fps=vid_fps,
+                    enable_blur1=enable_blur1,
+                    blur1_box=b1_box,
+                    enable_blur2=enable_blur2,
+                    blur2_box=b2_box,
+                    blur_opacity_pct=blur_opacity_pct,
+                    show_sub=show_sub,
+                    sub_y_pct=sub_y_pct,
+                    wm_rgba=wm_rgba,
+                    mirror_vid=mirror_vid,
+                    zoom_pct=zoom_pct,
+                    brightness_val=brightness_val,
+                    contrast_val=contrast_val,
+                    saturation_val=saturation_val,
+                    orig_vol_pct=orig_vol_pct,
+                    vo_vol_pct=vo_vol_pct,
+                    progress_bar=p_bar,
+                    step_text_placeholder=step_box
+                )
+
+                with open(out_video_path, "rb") as vf:
+                    v_bytes = vf.read()
+                st.session_state["final_video_bytes"] = v_bytes
+                st.session_state["final_srt_content"] = srt_content
+                st.session_state["final_mb_size"] = len(v_bytes) / (1024 * 1024)
+
+                step_box.success(f"✅ အားလုံး အောင်မြင်စွာ ပြီးဆုံးပါပြီ! (9:16 HD • {st.session_state['final_mb_size']:.1f} MB)")
+
+            except Exception as e:
+                step_box.error(f"❌ Error ဖြစ်ပွားပါသည်: {e}")
+
+    if "final_srt_content" in st.session_state and st.session_state["final_srt_content"]:
+        st.download_button(
+            "📄 မြန်မာ SRT Download",
+            data=st.session_state["final_srt_content"],
+            file_name="RecapMM_Subtitle.srt",
+            mime="text/plain",
+            use_container_width=True
+        )
+
+    if "final_video_bytes" in st.session_state and st.session_state["final_video_bytes"]:
+        mb_val = st.session_state.get("final_mb_size", 0.0)
+        st.video(st.session_state["final_video_bytes"], format="video/mp4")
+        st.download_button(
+            f"📥 MP4 Download ({mb_val:.1f} MB)",
+            data=st.session_state["final_video_bytes"],
+            file_name="RecapMM_916_Video.mp4",
+            mime="video/mp4",
+            use_container_width=True
+    )
