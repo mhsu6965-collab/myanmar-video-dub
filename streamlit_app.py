@@ -1,20 +1,8 @@
-import os
-import re
-import json
-import time
-import base64
-import asyncio
-import subprocess
-import tempfile
 import streamlit as st
 import streamlit.components.v1 as components
-from groq import Groq
-from google import genai
-from google.genai import types
-import edge_tts
 
 st.set_page_config(
-    page_title="RecapMM • Studio99 Local Turbo",
+    page_title="RecapMM • Studio99 Smart Sync",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -88,7 +76,6 @@ APP_HTML = f"""
         color: var(--text-dark);
         overflow: hidden;
     }}
-    /* မျက်နှာပြင်ကို အပေါ် (Fixed 9:16 Video) နှင့် အောက် (Scrollable Tools) နှစ်ပိုင်းခွဲထားသည် */
     .split-layout {{
         display: flex;
         flex-direction: column;
@@ -114,7 +101,7 @@ APP_HTML = f"""
         margin-bottom: 8px;
     }}
     .brand-logo {{
-        font-size: 1.05rem;
+        font-size: 1.02rem;
         font-weight: 800;
         color: #EA580C;
         line-height: 1.2;
@@ -131,9 +118,9 @@ APP_HTML = f"""
         background: #0F172A;
         color: #FFFFFF;
         border: 1.5px solid #14B8A6;
-        padding: 6px 12px;
+        padding: 6px 11px;
         border-radius: 10px;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         font-weight: 700;
         cursor: pointer;
         display: inline-flex;
@@ -147,11 +134,10 @@ APP_HTML = f"""
         border: 1px solid #CBD5E1;
         border-radius: 10px;
         padding: 6px 10px;
-        font-size: 0.8rem;
+        font-size: 0.78rem;
         font-weight: 700;
         cursor: pointer;
     }}
-    /* 9:16 ဒေါင်လိုက် Video Stage (အလယ်တွင် သပ်ရပ်စွာ ပုံသေရှိနေမည်) */
     .stage-outer {{
         width: 100%;
         display: flex;
@@ -161,10 +147,11 @@ APP_HTML = f"""
         border-radius: 14px;
         padding: 6px 0;
         border: 1px solid #334155;
+        position: relative;
     }}
     .canvas-916-box {{
         position: relative;
-        height: 250px;
+        height: 245px;
         aspect-ratio: 9 / 16;
         background: #000000;
         border-radius: 10px;
@@ -177,6 +164,18 @@ APP_HTML = f"""
         height: 100%;
         display: block;
         touch-action: none;
+    }}
+    .sync-badge {{
+        position: absolute;
+        top: 10px;
+        right: 12px;
+        background: rgba(16, 185, 129, 0.9);
+        color: #FFFFFF;
+        font-size: 0.68rem;
+        font-weight: 800;
+        padding: 3px 8px;
+        border-radius: 6px;
+        pointer-events: none;
     }}
     .player-bar {{
         display: flex;
@@ -205,10 +204,10 @@ APP_HTML = f"""
         height: 5px;
     }}
     .time-label {{
-        font-size: 0.75rem;
+        font-size: 0.74rem;
         font-weight: 700;
         color: var(--text-muted);
-        min-width: 70px;
+        min-width: 72px;
         text-align: right;
     }}
 
@@ -246,7 +245,7 @@ APP_HTML = f"""
         justify-content: center;
     }}
     .step-title {{
-        font-size: 0.98rem;
+        font-size: 0.96rem;
         font-weight: 800;
         color: var(--text-dark);
     }}
@@ -289,6 +288,7 @@ APP_HTML = f"""
     input:checked + .slider-pill.cyan {{ background-color: #0284C7; }}
     input:checked + .slider-pill.pink {{ background-color: #C026D3; }}
     input:checked + .slider-pill.orange {{ background-color: var(--accent-orange); }}
+    input:checked + .slider-pill.green {{ background-color: #10B981; }}
     input:checked + .slider-pill:before {{ transform: translateX(20px); }}
 
     .ratio-row {{
@@ -364,7 +364,7 @@ APP_HTML = f"""
         border: none;
         border-radius: 12px;
         font-weight: 800;
-        font-size: 0.95rem;
+        font-size: 0.94rem;
         cursor: pointer;
         box-shadow: 0 4px 12px rgba(234, 88, 12, 0.25);
         display: flex;
@@ -432,7 +432,6 @@ APP_HTML = f"""
     }}
     .full-slider {{ width: 100%; accent-color: var(--accent-orange); }}
 
-    /* PROGRESS BAR & STEP LOG BOX */
     .progress-card {{
         margin-top: 10px;
         padding: 12px;
@@ -485,6 +484,7 @@ APP_HTML = f"""
         </div>
 
         <div class="stage-outer">
+            <div class="sync-badge" id="smartSyncIndicator">⚡ Smart Sync: 1.00x</div>
             <div class="canvas-916-box" id="canvasBox">
                 <canvas id="mainCanvas" width="540" height="960"></canvas>
             </div>
@@ -505,11 +505,11 @@ APP_HTML = f"""
             <div class="step-title" style="margin-bottom:8px;">🔑 API Keys (တစ်ခါထည့်ထားရုံဖြင့် အမြဲမှတ်ထားမည်)</div>
             <div style="margin-bottom:8px;">
                 <label style="font-size:0.78rem;font-weight:700;">Groq API Key:</label>
-                <input type="password" id="groqKeyInput" value="{default_groq}" placeholder="gsk_..." style="width:100%;padding:8px;border-radius:8px;border:1px solid #CBD5E1;margin-top:3px;">
+                <input type="password" id="groqKeyInput" value="{default_groq}" placeholder="gsk_..." style="width:100%;padding:8px;border-radius:8px;border:1px solid #CBD5E1;margin-top:3px;user-select:text;-webkit-user-select:text;">
             </div>
             <div style="margin-bottom:8px;">
                 <label style="font-size:0.78rem;font-weight:700;">Gemini API Key:</label>
-                <input type="password" id="geminiKeyInput" value="{default_gemini}" placeholder="AIzaSy..." style="width:100%;padding:8px;border-radius:8px;border:1px solid #CBD5E1;margin-top:3px;">
+                <input type="password" id="geminiKeyInput" value="{default_gemini}" placeholder="AIzaSy..." style="width:100%;padding:8px;border-radius:8px;border:1px solid #CBD5E1;margin-top:3px;user-select:text;-webkit-user-select:text;">
             </div>
             <button class="btn-secondary" style="margin-bottom:0;" onclick="saveKeysToLocal()">✅ သိမ်းဆည်းမည်</button>
         </div>
@@ -564,34 +564,45 @@ APP_HTML = f"""
             </label>
         </div>
 
-        <!-- STEP 1: မြန်မာဘာသာပြန် SCRIPT (စာကြောင်းပြင်မည် ဖျက်ထားသည်) -->
+        <!-- STEP 1: GEMINI VISION + SMART SYNC SCRIPT -->
         <div class="card">
             <div class="step-head">
                 <div class="step-num">1</div>
-                <div class="step-title">မြန်မာဘာသာပြန် Script (Gemini 3.5)</div>
+                <div class="step-title">Gemini Vision (Video ကြည့်၍ ဘာသာပြန်ခြင်း) + Smart Sync</div>
+            </div>
+
+            <div class="blur-item" style="border-color:#A7F3D0;background:#ECFDF5;">
+                <div>
+                    <div style="font-weight:800;font-size:0.86rem;color:#065F46;">⚡ Smart Auto-Sync (ရုပ် + အသံ + စာတန်း)</div>
+                    <div style="font-size:0.73rem;color:#047857;">စကားပြောအရှည်ပေါ်မူတည်၍ Video နှင့် TTS အသံကို မြန်သင့်ရင်မြန် / နှေးသင့်ရင်နှေး အလိုအလျောက် ချိန်ညှိပေးမည်</div>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="smartSyncChk" checked>
+                    <span class="slider-pill green"></span>
+                </label>
             </div>
 
             <div class="select-card active" onclick="selectNarration('direct', this)">
-                <div class="sc-title">Direct Translation</div>
-                <div class="sc-sub">မူရင်း POV နှင့် အဓိပ္ပာယ်ကို မပြောင်းဘဲ ဘာသာပြန်မယ်</div>
+                <div class="sc-title">Direct Translation (Gemini Vision + Audio)</div>
+                <div class="sc-sub">Gemini က Video ပုံရိပ်နှင့် စကားပြောကို ကြည့်ပြီး မူရင်းအဓိပ္ပာယ်အတိုင်း ဘာသာပြန်မယ်</div>
             </div>
             <div class="select-card" onclick="selectNarration('third', this)">
-                <div class="sc-title">Third Person</div>
-                <div class="sc-sub">ပြင်ပဇာတ်ကြောင်းပြောသူအနေနဲ့ ဖြစ်စဉ်ကို ပြောမယ်</div>
+                <div class="sc-title">Third Person (Movie Recap ပုံစံ)</div>
+                <div class="sc-sub">Gemini က ဗီဒီယိုဇာတ်ဝင်ခန်းများကို ကြည့်ပြီး ပြင်ပဇာတ်ကြောင်းပြောသူအနေနဲ့ ပြောမယ်</div>
             </div>
             <div class="select-card" onclick="selectNarration('first', this)">
-                <div class="sc-title">First Person</div>
-                <div class="sc-sub">အဓိကဇာတ်ကောင် ကိုယ်တိုင်ပြောသလို ပြောမယ်</div>
+                <div class="sc-title">First Person (အဓိကဇာတ်ကောင် POV)</div>
+                <div class="sc-sub">အဓိကဇာတ်ကောင် ကိုယ်တိုင်ပြောသလို ဘာသာပြန်မယ်</div>
             </div>
 
-            <button class="btn-primary" id="genScriptBtn" onclick="runFastLocalAIWorkflow()" style="margin-top:8px;">
-                🪄 AI မြန်မာ Script + Voiceover အမြန်ထုတ်မယ်
+            <button class="btn-primary" id="genScriptBtn" onclick="runGeminiVisionAndSmartSync()" style="margin-top:8px;">
+                👁️ Gemini ဖြင့် Video ကြည့်၍ Script + Smart Sync ထုတ်မယ်
             </button>
 
             <div class="progress-card" id="aiProgressCard">
                 <div class="prog-step-txt" id="aiStepTitle">⏳ စတင်နေပါသည်...</div>
                 <div class="prog-bar-bg"><div class="prog-bar-fill" id="aiProgFill"></div></div>
-                <div class="prog-sub-txt" id="aiStepDetail">ဖုန်းထဲမှ အသံလမ်းကြောင်းကို ဖတ်ယူနေပါသည်...</div>
+                <div class="prog-sub-txt" id="aiStepDetail">ဗီဒီယိုပုံရိပ်နှင့် အသံလမ်းကြောင်းကို ဖတ်ယူနေပါသည်...</div>
             </div>
         </div>
 
@@ -629,7 +640,6 @@ APP_HTML = f"""
                 </div>
             </div>
 
-            <!-- TTS SPEED % AND PITCH % SLIDERS -->
             <div class="slider-group" style="margin-top:12px;">
                 <div class="slider-head">
                     <span>⚡ TTS အသံ Speed (%)</span>
@@ -764,23 +774,15 @@ APP_HTML = f"""
             <button class="btn-secondary" onclick="resetVisualFilters()">Reset</button>
         </div>
 
-        <!-- STEP 4: ထုတ်ယူမယ် (TURBO LOCAL RENDER WITH LIVE PROGRESS) -->
+        <!-- STEP 4: ထုတ်ယူမယ် (SMART SYNC LOCAL RENDER WITH LIVE PROGRESS) -->
         <div class="card">
             <div class="step-head">
                 <div class="step-num">4</div>
-                <div class="step-title">ထုတ်ယူမယ် (Turbo Local Render)</div>
-            </div>
-
-            <div class="slider-group">
-                <div class="slider-head">
-                    <span>🚀 Render အမြန်နှုန်း (Turbo Speed)</span>
-                    <span id="turboVal">2x (ပိုမြန်သည်)</span>
-                </div>
-                <input type="range" class="full-slider" id="turboSpeedSlider" min="1" max="4" step="1" value="2" oninput="document.getElementById('turboVal').innerText=this.value+'x အမြန်နှုန်း'">
+                <div class="step-title">ထုတ်ယူမယ် (Smart Sync Render)</div>
             </div>
 
             <button class="btn-secondary" onclick="downloadSRTFile()">📄 မြန်မာ SRT Download</button>
-            <button class="btn-primary" id="renderFinalBtn" onclick="startTurboLocalRender()">📥 Recap Video ထုတ်မယ်</button>
+            <button class="btn-primary" id="renderFinalBtn" onclick="startSmartSyncLocalRender()">📥 Recap Video ထုတ်မယ် (Smart Sync)</button>
 
             <div class="progress-card" id="renderProgressCard">
                 <div class="prog-step-txt" id="renderStepTitle">⏳ Video Render ပြုလုပ်နေပါသည်...</div>
@@ -805,6 +807,7 @@ const canvasBox = document.getElementById('canvasBox');
 const playBtn = document.getElementById('playBtn');
 const seekBar = document.getElementById('seekBar');
 const timeLabel = document.getElementById('timeLabel');
+const smartSyncIndicator = document.getElementById('smartSyncIndicator');
 
 const video = document.createElement('video');
 video.playsInline = true;
@@ -820,15 +823,17 @@ let isRecording = false;
 let showHandles = true;
 let handlesTimer = null;
 
+// Smart Sync ပါဝင်သော Segments (vidSpeed နှင့် ttsRate ကို စာကြောင်းအလိုက် အလိုအလျောက် တွက်ချက်ပေးသည်)
 let segments = [
-    {{ start: 0.0, end: 3.5, text: "ပြန်စရာအိမ်မရှိတော့တဲ့ ဇနီးမောင်နှံနှစ်ယောက်" }},
-    {{ start: 3.5, end: 7.5, text: "မြို့ပေါ်က သားငယ်ဆီမှာ တည်းခိုဖို့ စဉ်းစားခဲ့တယ်" }}
+    {{ start: 0.0, end: 3.5, text: "ပြန်စရာအိမ်မရှိတော့တဲ့ ဇနီးမောင်နှံနှစ်ယောက်", vidSpeed: 1.0, ttsRate: 1.0 }},
+    {{ start: 3.5, end: 7.5, text: "မြို့ပေါ်က သားငယ်ဆီမှာ တည်းခိုဖို့ စဉ်းစားခဲ့တယ်", vidSpeed: 1.0, ttsRate: 1.0 }}
 ];
 
 let synthesizedAudioMap = {{}};
 let activeSpeechAudio = new Audio();
+let audioCtxGlobal = null;
+let ttsGainNode = null;
 
-// Video သည် 9:16 ဘောင်ထဲတွင် ပုံသေ (Locked) ဖြစ်ပြီး Blur 1, Blur 2, Subtitle, Watermark သာ လက်ဖြင့်ရွှေ့နိုင်မည်
 let boxes = {{
     blur1: {{ x: 0.06, y: 0.72, w: 0.88, h: 0.10, color: '#00E5FF' }},
     blur2: {{ x: 0.06, y: 0.06, w: 0.40, h: 0.08, color: '#D946EF' }},
@@ -860,7 +865,7 @@ function wakeHandles() {{
     handlesTimer = setTimeout(() => {{ if (!activeDrag) showHandles = false; }}, 3000);
 }}
 
-// ==================== INSTANT LOCAL GALLERY VIDEO LOAD (NO UPLOAD DELAY) ====================
+// ==================== INSTANT LOCAL GALLERY VIDEO LOAD ====================
 document.getElementById('galleryVideoInput').addEventListener('change', function(e) {{
     const file = e.target.files[0];
     if (!file) return;
@@ -903,7 +908,6 @@ playBtn.addEventListener('click', () => {{
         return;
     }}
     if (video.paused) {{
-        video.playbackRate = 1.0;
         video.play();
         playBtn.innerText = '⏸';
     }} else {{
@@ -920,7 +924,7 @@ seekBar.addEventListener('input', () => {{
 video.addEventListener('timeupdate', () => {{
     if (!seekBar.matches(':active')) seekBar.value = video.currentTime;
     timeLabel.innerText = `${{fmtTime(video.currentTime)}} / ${{fmtTime(video.duration || 0)}}`;
-    syncVoiceoverPlayback(video.currentTime);
+    syncSmartVideoAndVoice(video.currentTime);
 }});
 
 function fmtTime(s) {{
@@ -964,7 +968,7 @@ function hitTestCanvas(pt) {{
         const m1 = checkRect(boxes.blur1);
         if (m1) return {{ key: 'blur1', mode: m1 }};
     }}
-    return null; // Video ကို လုံးဝ ရွှေ့မရအောင် Lock ချထားသည်
+    return null;
 }}
 
 function handleDown(e) {{
@@ -1011,10 +1015,10 @@ canvas.addEventListener('touchstart', handleDown, {{ passive: false }});
 window.addEventListener('touchmove', handleMove, {{ passive: false }});
 window.addEventListener('touchend', handleUp);
 
-// ==================== 60FPS 9:16 CANVAS RENDER LOOP & AUTO TEXT WRAP ====================
+// ==================== 60FPS 9:16 CANVAS RENDER LOOP ====================
 function cleanMyanmarText(txt) {{
     if (!txt) return "";
-    return txt.replace(/[\u200b\u200c\u200d\ufeff]/g, "").trim();
+    return String(txt).replace(/[\u200b\u200c\u200d\ufeff]/g, "").trim();
 }}
 
 function wrapMyanmarSubtitleLines(ctx, text, maxWidth) {{
@@ -1040,7 +1044,6 @@ function drawFrame() {{
     const cont = parseFloat(document.getElementById('contSlider').value);
     const sat = parseFloat(document.getElementById('satSlider').value);
 
-    // 9:16 ဘောင်အတွင်း Video ကို အလယ်တည့်တည့် ပုံသေ ဆွဲပေးခြင်း
     if (video.readyState >= 2) {{
         const vw = video.videoWidth || 720, vh = video.videoHeight || 1280;
         const zm = parseFloat(document.getElementById('zoomSlider').value) / 100.0;
@@ -1066,7 +1069,6 @@ function drawFrame() {{
         ctx.fillText('▶ Gallery မှ ဗီဒီယိုရွေးပါ', cw / 2, ch / 2);
     }}
 
-    // BLUR MASKS
     const blurOp = parseInt(document.getElementById('blurOpacity').value) / 100.0;
     const renderBlurBox = (b, enabled) => {{
         if (!enabled || blurOp <= 0) return;
@@ -1099,7 +1101,6 @@ function drawFrame() {{
     renderBlurBox(boxes.blur1, document.getElementById('blur1Chk').checked);
     renderBlurBox(boxes.blur2, document.getElementById('blur2Chk').checked);
 
-    // WATERMARK
     if (document.getElementById('wmChk').checked) {{
         const wmTxt = document.getElementById('wmTextInput').value.trim();
         const wmOp = parseInt(document.getElementById('wmOpSlider').value) / 100.0;
@@ -1114,7 +1115,6 @@ function drawFrame() {{
         }}
     }}
 
-    // SUBTITLES (9:16 ဘောင်အပြင်သို့ လုံးဝမထွက်စေရန် Auto-Wrap ပါဝင်သည်)
     if (document.getElementById('showSubChk').checked) {{
         const offset = parseFloat(document.getElementById('audioOffsetSlider').value) || 0;
         const t = (video.currentTime || 0) - offset;
@@ -1225,13 +1225,37 @@ function pickSubColor(clr, el) {{
     el.innerText = '✓';
 }}
 
-// ==================== FAST 8KHz WAV EXTRACTOR (10X FASTER IN BROWSER) ====================
-async function extractFastAudioBlob(file, progCallback) {{
-    progCallback(15, "အဆင့် ၁/၄ - ဖုန်းထဲရှိ ဗီဒီယိုမှ အသံလမ်းကြောင်းကို အမြန်ဆွဲထုတ်နေပါသည်...");
+// ==================== 1. VIDEO KEYFRAMES EXTRACTOR FOR GEMINI VISION ====================
+async function captureVideoKeyframesBase64(vidEl, count = 4) {{
+    const frames = [];
+    const origTime = vidEl.currentTime;
+    const dur = Math.max(1.0, vidEl.duration || 10.0);
+    const tmpCanvas = document.createElement('canvas');
+    tmpCanvas.width = 320;
+    tmpCanvas.height = 568;
+    const tCtx = tmpCanvas.getContext('2d');
+
+    for (let i = 0; i < count; i++) {{
+        const targetT = Math.min(dur - 0.2, (dur / (count + 1)) * (i + 1));
+        vidEl.currentTime = targetT;
+        await new Promise(res => {{
+            const onSeek = () => {{ vidEl.removeEventListener('seeked', onSeek); res(); }};
+            vidEl.addEventListener('seeked', onSeek);
+            setTimeout(res, 400);
+        }});
+        tCtx.drawImage(vidEl, 0, 0, tmpCanvas.width, tmpCanvas.height);
+        const b64 = tmpCanvas.toDataURL('image/jpeg', 0.65).split(',')[1];
+        if (b64) frames.push(b64);
+    }}
+    vidEl.currentTime = origTime;
+    return frames;
+}}
+
+// ==================== 2. FAST 8KHz WAV AUDIO EXTRACTOR ====================
+async function extractFastAudioBlob(file) {{
     const arrayBuf = await file.arrayBuffer();
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const decoded = await audioCtx.decodeAudioData(arrayBuf);
-    // 8000Hz Mono သုံးသဖြင့် အရင်ကထက် ၂ ဆ ပိုမြန်ပြီး ဖိုင်ဆိုဒ် 50% ပိုသေးသည်
     const sampleRate = 8000;
     const offlineCtx = new OfflineAudioContext(1, Math.floor(decoded.duration * sampleRate), sampleRate);
     const source = offlineCtx.createBufferSource();
@@ -1257,7 +1281,138 @@ async function extractFastAudioBlob(file, progCallback) {{
     return new Blob([wavBuf], {{ type: 'audio/wav' }});
 }}
 
-async function runFastLocalAIWorkflow() {{
+// ==================== 3. SAFE JSON PARSER & MULTI-MODEL GEMINI VISION TRANSLATOR ====================
+function safeExtractJsonMap(rawText) {{
+    const map = {{}};
+    if (!rawText) return map;
+    try {{
+        let cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        const parsed = JSON.parse(cleaned);
+        const list = Array.isArray(parsed) ? parsed : (parsed.items || parsed.translations || parsed.data || []);
+        if (Array.isArray(list)) {{
+            list.forEach(item => {{
+                if (item && item.id !== undefined && item.translation) {{
+                    map[parseInt(item.id)] = String(item.translation).trim();
+                }}
+            }});
+        }}
+    }} catch (e) {{
+        console.warn("JSON fallback regex parse:", e);
+    }}
+    return map;
+}}
+
+async function translateWithGeminiVisionAndFallback(rawSegments, keyframesB64, geminiKey, groqKey, stylePrompt, updateProg) {{
+    const finalTransMap = {{}};
+    const batchSize = 20;
+    const geminiModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+
+    for (let b = 0; b < rawSegments.length; b += batchSize) {{
+        const chunk = rawSegments.slice(b, b + batchSize);
+        const payload = chunk.map((s, idx) => ({{ id: b + idx, text: s.text }}));
+        const pct = Math.min(82, 45 + Math.round((b / rawSegments.length) * 35));
+        updateProg(pct, "👁️ အဆင့် ၃/၄ - Gemini Vision ဘာသာပြန်စနစ်", `ဗီဒီယိုပုံရိပ်များကို ကြည့်၍ စာကြောင်း (${{b + 1}} မှ ${{b + chunk.length}}) ကို မြန်မာဘာသာပြန်နေပါသည်...`);
+
+        let batchSuccess = false;
+
+        // Gemini Vision Models စမ်းသပ်ခြင်း (Cannot read properties of undefined reading '0' လုံးဝမဖြစ်စေရန် Safe Check ပါဝင်သည်)
+        for (const mName of geminiModels) {{
+            try {{
+                const parts = [];
+                if (b === 0 && keyframesB64.length > 0) {{
+                    keyframesB64.forEach(b64 => {{
+                        parts.push({{ inlineData: {{ mimeType: "image/jpeg", data: b64 }} }});
+                    }});
+                }}
+                parts.push({{
+                    text: `You are watching these keyframes from a video. ${{stylePrompt}}\nTranslate each item into natural, concise spoken Burmese (Myanmar) so it fits the speaking duration. Do NOT use emojis. Return ONLY a valid JSON array of objects with keys "id" and "translation":\n${{JSON.stringify(payload)}}`
+                }});
+
+                const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/${{mName}}:generateContent?key=${{geminiKey}}`;
+                const gResp = await fetch(gUrl, {{
+                    method: 'POST',
+                    headers: {{ 'Content-Type': 'application/json' }},
+                    body: JSON.stringify({{
+                        contents: [{{ parts: parts }}],
+                        generationConfig: {{ responseMimeType: "application/json", temperature: 0.3 }}
+                    }})
+                }});
+
+                if (gResp.ok) {{
+                    const gJson = await gResp.json();
+                    const candText = gJson && gJson.candidates && gJson.candidates[0] && gJson.candidates[0].content && gJson.candidates[0].content.parts && gJson.candidates[0].content.parts[0] ? gJson.candidates[0].content.parts[0].text : null;
+                    if (candText) {{
+                        const parsedMap = safeExtractJsonMap(candText);
+                        if (Object.keys(parsedMap).length > 0) {{
+                            Object.assign(finalTransMap, parsedMap);
+                            batchSuccess = true;
+                            break;
+                        }}
+                    }}
+                }}
+            }} catch (err) {{
+                console.warn(`Gemini model ${{mName}} retry:`, err);
+            }}
+        }}
+
+        // အကယ်၍ Gemini Key သို့မဟုတ် Model အခက်အခဲရှိပါက Groq Llama-3.3-70B က ချက်ချင်း ဝင်ရောက်ဘာသာပြန်ပေးမည်
+        if (!batchSuccess) {{
+            const bResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {{
+                method: 'POST',
+                headers: {{ 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{
+                    model: 'llama-3.3-70b-versatile',
+                    messages: [
+                        {{ role: 'system', content: `${{stylePrompt}} Translate into concise spoken Burmese (Myanmar). Output valid JSON only.` }},
+                        {{ role: 'user', content: `Return a JSON object with key "items" containing an array of objects with "id" and "translation":\n${{JSON.stringify(payload)}}` }}
+                    ],
+                    response_format: {{ type: 'json_object' }}
+                }})
+            }});
+            if (bResp.ok) {{
+                const bJson = await bResp.json();
+                const contentTxt = bJson && bJson.choices && bJson.choices[0] && bJson.choices[0].message ? bJson.choices[0].message.content : "";
+                const parsedMap = safeExtractJsonMap(contentTxt);
+                Object.assign(finalTransMap, parsedMap);
+            }}
+        }}
+    }}
+    return finalTransMap;
+}}
+
+// ==================== 4. SMART SYNC CALCULATOR (VIDEO SPEED + TTS SPEED + SRT TIMING) ====================
+function computeSmartSyncParameters(segList, userBaseSpeedPct) {{
+    const baseRate = Math.max(0.6, Math.min(1.8, 1.0 + (userBaseSpeedPct / 100.0)));
+    return segList.map(seg => {{
+        const slotDur = Math.max(0.4, seg.end - seg.start);
+        // မြန်မာစာလုံး အရေအတွက်ပေါ်မူတည်၍ ကြာချိန်ကို ခန့်မှန်းတွက်ချက်ခြင်း (၁ စက္ကန့်လျှင် ပျမ်းမျှ ၁၁ လုံး)
+        const charCount = Math.max(1, seg.text.length);
+        const estimatedTtsDur = (charCount / 11.5) / baseRate;
+        const ratio = estimatedTtsDur / slotDur;
+
+        let ttsRate = baseRate;
+        let vidSpeed = 1.0;
+
+        if (ratio > 1.12) {{
+            // စာကြောင်းရှည်နေပါက TTS အသံကို မြန်ပေးပြီး Video အပိုင်းကိုပါ အနည်းငယ် နှေးပေးခြင်းဖြင့် ကွက်တိကျစေသည်
+            ttsRate = Math.min(1.65, baseRate * Math.pow(ratio, 0.65));
+            const remainingRatio = (estimatedTtsDur / (ttsRate / baseRate)) / slotDur;
+            vidSpeed = Math.max(0.65, Math.min(1.0, 1.0 / remainingRatio));
+        }} else if (ratio < 0.72) {{
+            // စာကြောင်းတိုနေပါက Video အပိုင်းကို အနည်းငယ် မြန်ပေးပြီး TTS ကို သဘာဝအတိုင်း နှေးပေးသည်
+            ttsRate = Math.max(0.82, baseRate * Math.pow(ratio, 0.35));
+            vidSpeed = Math.min(1.45, Math.max(1.0, 1.0 / Math.max(0.65, ratio)));
+        }}
+
+        return {{
+            ...seg,
+            ttsRate: parseFloat(ttsRate.toFixed(2)),
+            vidSpeed: parseFloat(vidSpeed.toFixed(2))
+        }};
+    }});
+}}
+
+async function runGeminiVisionAndSmartSync() {{
     const groqKey = document.getElementById('groqKeyInput').value.trim();
     const geminiKey = document.getElementById('geminiKeyInput').value.trim();
     const card = document.getElementById('aiProgressCard');
@@ -1276,9 +1431,12 @@ async function runFastLocalAIWorkflow() {{
     if (!groqKey || !geminiKey) {{ toggleApiModal(); alert("Groq နှင့် Gemini API Key ထည့်သွင်းပေးပါ။"); return; }}
 
     try {{
-        const wavBlob = await extractFastAudioBlob(currentVideoFile, (p, msg) => updateProg(p, "🎧 အသံထုတ်ယူနေသည်", msg));
+        updateProg(10, "👁️ အဆင့် ၁/၄ - Video ပုံရိပ်များ ဖမ်းယူနေသည်", "Gemini ကြည့်ရှုနိုင်ရန် Video ထဲမှ အဓိက ဇာတ်ဝင်ခန်းပုံရိပ်များကို ဆွဲထုတ်နေပါသည်...");
+        const keyframesB64 = await captureVideoKeyframesBase64(video, 4);
 
-        updateProg(35, "🎧 အဆင့် ၂/၄ - Groq Whisper AI", "ဗီဒီယိုထဲမှ စကားပြောချိန် (Timestamps) များကို နားထောင်နေပါသည်...");
+        updateProg(22, "🎧 အဆင့် ၂/၄ - အသံနှင့် စကားပြောချိန် ထုတ်ယူနေသည်", "ဗီဒီယိုထဲမှ အသံကို ဆွဲထုတ်ပြီး Groq Whisper AI ဖြင့် နားထောင်နေပါသည်...");
+        const wavBlob = await extractFastAudioBlob(currentVideoFile);
+
         const formData = new FormData();
         formData.append('file', wavBlob, 'audio.wav');
         formData.append('model', 'whisper-large-v3-turbo');
@@ -1289,63 +1447,36 @@ async function runFastLocalAIWorkflow() {{
             headers: {{ 'Authorization': 'Bearer ' + groqKey }},
             body: formData
         }});
+        if (!wResp.ok) throw new Error("Groq API Key မှားယွင်းနေပါသည် သို့မဟုတ် အင်တာနက်လိုင်း ပြတ်တောက်နေပါသည်။");
         const wData = await wResp.json();
-        if (!wData.segments || wData.segments.length === 0) throw new Error("စကားပြောသံ မတွေ့ရှိပါ။");
-
-        updateProg(65, "🤖 အဆင့် ၃/၄ - Gemini 3.5 ဘာသာပြန်စနစ်", `စာကြောင်း (${{wData.segments.length}}) ကြောင်းကို မြန်မာဘာသာပြန်နေပါသည်...`);
+        const rawSegs = (wData && Array.isArray(wData.segments)) ? wData.segments : [];
+        if (rawSegs.length === 0) throw new Error("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ။");
 
         let stylePrompt = "Translate directly and naturally into spoken Burmese (Myanmar) keeping original POV.";
         if (narrationStyle === 'third') stylePrompt = "Rewrite and translate into natural Burmese (Myanmar) as a Third-Person movie recap narrator.";
         if (narrationStyle === 'first') stylePrompt = "Rewrite and translate into natural Burmese (Myanmar) from a First-Person main character perspective.";
 
-        const payload = wData.segments.map((s, idx) => ({{ id: idx, text: s.text }}));
-        const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${{geminiKey}}`;
-        const gResp = await fetch(gUrl, {{
-            method: 'POST',
-            headers: {{ 'Content-Type': 'application/json' }},
-            body: JSON.stringify({{
-                contents: [{{ parts: [{{ text: `${{stylePrompt}}\nReturn ONLY a valid JSON array of objects with 'id' and 'translation':\n${{JSON.stringify(payload)}}` }}] }}],
-                generationConfig: {{ responseMimeType: "application/json" }}
-            }})
-        }});
+        const transMap = await translateWithGeminiVisionAndFallback(rawSegs, keyframesB64, geminiKey, groqKey, stylePrompt, updateProg);
 
-        let transMap = {{}};
-        if (gResp.ok) {{
-            const gJson = await gResp.json();
-            const parsed = JSON.parse(gJson.candidates[0].content.parts[0].text);
-            parsed.forEach(item => {{ transMap[item.id] = item.translation; }});
-        }} else {{
-            const bResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {{
-                method: 'POST',
-                headers: {{ 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [{{ role: 'user', content: `${{stylePrompt}}\nReturn JSON object with key 'items' containing array of 'id' and 'translation':\n${{JSON.stringify(payload)}}` }}],
-                    response_format: {{ type: 'json_object' }}
-                }})
-            }});
-            const bJson = await bResp.json();
-            const parsed = JSON.parse(bJson.choices[0].message.content).items || [];
-            parsed.forEach(item => {{ transMap[item.id] = item.translation; }});
-        }}
+        const baseSegs = rawSegs.map((s, idx) => ({{
+            start: parseFloat(Number(s.start || 0).toFixed(2)),
+            end: parseFloat(Number(s.end || (s.start + 2)).toFixed(2)),
+            text: cleanMyanmarText(transMap[idx] || s.text || "")
+        }})).filter(s => s.text.length > 0);
 
-        segments = wData.segments.map((s, idx) => ({{
-            start: parseFloat(s.start.toFixed(2)),
-            end: parseFloat(s.end.toFixed(2)),
-            text: cleanMyanmarText(transMap[idx] || s.text)
-        }}));
+        updateProg(88, "⚡ အဆင့် ၄/၄ - Smart Sync ချိန်ညှိနေသည်", "Video ရုပ်၊ မြန်မာ TTS အသံ နှင့် SRT စာတန်း ၃ ခုလုံး ကွက်တိဖြစ်အောင် အနှေး/အမြန် တွက်ချက်နေပါသည်...");
+        const userSpd = parseInt(document.getElementById('ttsSpeedSlider').value) || 0;
+        segments = computeSmartSyncParameters(baseSegs, userSpd);
 
-        updateProg(90, "🗣️ အဆင့် ၄/၄ - Voiceover အသံဖန်တီးနေသည်", "မြန်မာစာတန်းနှင့် Voiceover အသံချိတ်ဆက်နေပါသည်...");
         synthesizedAudioMap = {{}};
         for (let i = 0; i < segments.length; i++) {{
-            const txt = segments[i].text.trim();
-            if (!txt) continue;
+            const txt = segments[i].text;
             synthesizedAudioMap[i] = `https://translate.google.com/translate_tts?ie=UTF-8&q=${{encodeURIComponent(txt.slice(0, 180))}}&tl=my&client=tw-ob`;
         }}
 
-        updateProg(100, "✅ အားလုံး အသင့်ဖြစ်ပါပြီ!", `စာကြောင်း (${{segments.length}}) ကြောင်း ဘာသာပြန်ပြီးပါပြီ။ အပေါ်က Video ကို Play နှိပ်ကြည့်ပါ။`);
+        updateProg(100, "✅ Gemini Vision + Smart Sync အောင်မြင်ပါပြီ!", `စာကြောင်း (${{segments.length}}) ကြောင်းကို ရုပ်+အသံ+စာတန်း ချိတ်ဆက်ပြီးပါပြီ။ အပေါ်က Video ကို Play နှိပ်ကြည့်ပါ။`);
     }} catch (err) {{
-        updateProg(100, "❌ Error ဖြစ်ပွားပါသည်", err.message);
+        updateProg(100, "❌ Error ဖြစ်ပွားပါသည်", err.message || String(err));
     }}
 }}
 
@@ -1357,12 +1488,14 @@ function previewVoice(idx) {{
     aud.play().catch(() => {{}});
 }}
 
+// ==================== SMART SYNC PLAYBACK (AUTO VIDEO SPEED + TTS RATE + SRT) ====================
 let lastPlayedSegIdx = -1;
-function syncVoiceoverPlayback(curTime) {{
+function syncSmartVideoAndVoice(curTime) {{
     if (video.paused) return;
     video.volume = parseInt(document.getElementById('origVolSlider').value) / 100.0;
     const offset = parseFloat(document.getElementById('audioOffsetSlider').value) || 0;
     const adjTime = curTime - offset;
+    const smartOn = document.getElementById('smartSyncChk').checked;
 
     let foundIdx = -1;
     for (let i = 0; i < segments.length; i++) {{
@@ -1371,20 +1504,34 @@ function syncVoiceoverPlayback(curTime) {{
             break;
         }}
     }}
-    if (foundIdx !== -1 && foundIdx !== lastPlayedSegIdx && synthesizedAudioMap[foundIdx]) {{
-        lastPlayedSegIdx = foundIdx;
-        const spdPct = parseInt(document.getElementById('ttsSpeedSlider').value) || 0;
-        const turboFactor = isRecording ? (parseInt(document.getElementById('turboSpeedSlider').value) || 1) : 1;
-        activeSpeechAudio.src = synthesizedAudioMap[foundIdx];
-        activeSpeechAudio.volume = parseInt(document.getElementById('voVolSlider').value) / 100.0;
-        activeSpeechAudio.playbackRate = Math.max(0.5, Math.min(2.5, (1.0 + (spdPct / 100.0)) * turboFactor));
-        activeSpeechAudio.play().catch(() => {{}});
-    }} else if (foundIdx === -1) {{
+
+    if (foundIdx !== -1) {{
+        const seg = segments[foundIdx];
+        const targetVidSpeed = smartOn ? (seg.vidSpeed || 1.0) : 1.0;
+        if (Math.abs(video.playbackRate - targetVidSpeed) > 0.04) {{
+            video.playbackRate = targetVidSpeed;
+        }}
+        smartSyncIndicator.innerText = `⚡ Smart Sync: Video ${{targetVidSpeed.toFixed(2)}}x | TTS ${{(seg.ttsRate || 1.0).toFixed(2)}}x`;
+
+        if (foundIdx !== lastPlayedSegIdx && synthesizedAudioMap[foundIdx]) {{
+            lastPlayedSegIdx = foundIdx;
+            const userSpdPct = parseInt(document.getElementById('ttsSpeedSlider').value) || 0;
+            const baseUserRate = Math.max(0.5, Math.min(2.0, 1.0 + (userSpdPct / 100.0)));
+            const finalTtsRate = smartOn ? (seg.ttsRate || baseUserRate) : baseUserRate;
+
+            activeSpeechAudio.src = synthesizedAudioMap[foundIdx];
+            activeSpeechAudio.volume = parseInt(document.getElementById('voVolSlider').value) / 100.0;
+            activeSpeechAudio.playbackRate = Math.max(0.5, Math.min(2.2, finalTtsRate));
+            activeSpeechAudio.play().catch(() => {{}});
+        }}
+    }} else {{
         lastPlayedSegIdx = -1;
+        if (Math.abs(video.playbackRate - 1.0) > 0.04) video.playbackRate = 1.0;
+        smartSyncIndicator.innerText = `⚡ Smart Sync: 1.00x`;
     }}
 }}
 
-// ==================== SRT DOWNLOAD & TURBO LOCAL RENDER WITH LIVE PROGRESS ====================
+// ==================== SRT DOWNLOAD & SMART SYNC LOCAL RENDER ====================
 function downloadSRTFile() {{
     const fmtSrt = (s) => {{
         const hrs = Math.floor(s / 3600);
@@ -1400,11 +1547,11 @@ function downloadSRTFile() {{
     const blob = new Blob([srt], {{ type: 'text/plain;charset=utf-8' }});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = "RecapMM_Subtitle.srt";
+    a.download = "RecapMM_SmartSync.srt";
     a.click();
 }}
 
-function startTurboLocalRender() {{
+function startSmartSyncLocalRender() {{
     if (!video.src) {{ alert("ကျေးဇူးပြု၍ အပေါ်ဆုံးမှ Gallery ဗီဒီယို အရင်ရွေးပေးပါ။"); return; }}
     const pCard = document.getElementById('renderProgressCard');
     const pTitle = document.getElementById('renderStepTitle');
@@ -1414,7 +1561,6 @@ function startTurboLocalRender() {{
     const outVid = document.getElementById('finalOutputPreview');
     const dlAnchor = document.getElementById('finalDownloadAnchor');
 
-    const turboRate = parseInt(document.getElementById('turboSpeedSlider').value) || 2;
     pCard.style.display = 'block';
     outWrap.style.display = 'none';
 
@@ -1423,6 +1569,21 @@ function startTurboLocalRender() {{
     const chunks = [];
     const stream = canvas.captureStream(30);
 
+    // WebAudio ဖြင့် TTS အသံကို Video Stream ထဲသို့ တိုက်ရိုက် ပေါင်းထည့်ခြင်း
+    try {{
+        if (!audioCtxGlobal) {{
+            audioCtxGlobal = new (window.AudioContext || window.webkitAudioContext)();
+            const dest = audioCtxGlobal.createMediaStreamDestination();
+            activeSpeechAudio.crossOrigin = "anonymous";
+            const ttsSource = audioCtxGlobal.createMediaElementSource(activeSpeechAudio);
+            ttsSource.connect(dest);
+            ttsSource.connect(audioCtxGlobal.destination);
+            dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
+        }}
+    }} catch (e) {{
+        console.log("Audio stream note:", e);
+    }}
+
     const mime = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm;codecs=vp8';
     const recorder = new MediaRecorder(stream, {{ mimeType: mime, videoBitsPerSecond: 1800000 }});
 
@@ -1430,10 +1591,10 @@ function startTurboLocalRender() {{
         if (!isRecording) {{ clearInterval(progInterval); return; }}
         const dur = video.duration || 1;
         const pct = Math.min(99, Math.round((video.currentTime / dur) * 100));
-        const remSec = Math.max(0, Math.round((dur - video.currentTime) / turboRate));
+        const remSec = Math.max(0, Math.round(dur - video.currentTime));
         pFill.style.width = pct + '%';
-        pTitle.innerText = `🚀 Turbo Local Render (${{turboRate}}x Speed) — ${{pct}}%`;
-        pDetail.innerText = `လက်ရှိအချိန်: ${{fmtTime(video.currentTime)}} / ${{fmtTime(dur)}} (ခန့်မှန်းကျန်ချိန်: ${{remSec}} စက္ကန့်) — Blur နှင့် မြန်မာစာတန်း ပေါင်းစပ်နေသည်...`;
+        pTitle.innerText = `🎬 Smart Sync Rendering — ${{pct}}%`;
+        pDetail.innerText = `လက်ရှိအချိန်: ${{fmtTime(video.currentTime)}} / ${{fmtTime(dur)}} (Video Speed: ${{video.playbackRate.toFixed(2)}}x ဖြင့် ရုပ်+အသံ+စာတန်း ချိန်ညှိပေါင်းစပ်နေသည်...)`;
     }}, 250);
 
     recorder.ondataavailable = (e) => {{ if (e.data && e.data.size > 0) chunks.push(e.data); }};
@@ -1447,15 +1608,15 @@ function startTurboLocalRender() {{
         const url = URL.createObjectURL(blob);
         outVid.src = url;
         dlAnchor.href = url;
-        dlAnchor.download = mime.includes('mp4') ? `RecapMM_${{mb}}MB.mp4` : `RecapMM_${{mb}}MB.webm`;
+        dlAnchor.download = mime.includes('mp4') ? `RecapMM_SmartSync_${{mb}}MB.mp4` : `RecapMM_SmartSync_${{mb}}MB.webm`;
         dlAnchor.innerText = `📥 MP4 Download (${{mb}} MB)`;
-        pTitle.innerText = `✅ Local Render အောင်မြင်စွာ ပြီးဆုံးပါပြီ!`;
+        pTitle.innerText = `✅ Smart Sync Render အောင်မြင်စွာ ပြီးဆုံးပါပြီ!`;
         pDetail.innerText = `ဖိုင်ဆိုဒ်: ${{mb}} MB (အောက်တွင် တိုက်ရိုက် ကြည့်ရှု/Download ဆွဲနိုင်ပါပြီ)`;
         outWrap.style.display = 'block';
     }};
 
     video.currentTime = 0;
-    video.playbackRate = turboRate;
+    lastPlayedSegIdx = -1;
     video.play();
     recorder.start(200);
 
