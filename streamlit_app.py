@@ -617,16 +617,16 @@ APP_HTML = f"""
             </label>
         </div>
 
-        <!-- ==================== STEP 1: GEMINI VISION ဖြင့် ချောမွေ့သော မြန်မာဘာသာပြန်ခြင်း ==================== -->
+        <!-- ==================== STEP 1: မြန်မာဘာသာ အရင်ပြန်မည် (MULTI-MODEL ROTATION + AUTO WAIT) ==================== -->
         <div class="card">
             <div class="step-head">
                 <div class="step-num">1</div>
-                <div class="step-title">Gemini Vision (Video ကြည့်၍ သဘာဝကျကျ မြန်မာပြန်မည်)</div>
+                <div class="step-title">မြန်မာဘာသာ အရင်ပြန်မည် (Gemini 3.5 Auto-Rotate)</div>
             </div>
 
             <div class="select-card active" onclick="selectNarration('direct', this)">
                 <div class="sc-title">Direct Natural Burmese (သဘာဝ မြန်မာစကားပြော)</div>
-                <div class="sc-sub">Gemini က Video ဇာတ်ဝင်ခန်းများကို ကြည့်ပြီး စက်ရုပ်မဆန်ဘဲ အချိတ်အဆက်မိမိ မြန်မာစကားပြောအစစ်ဖြင့် ပြန်ပေးမယ်</div>
+                <div class="sc-sub">Whisper မှ ရလာသော Script နှင့် Video ကို ကြည့်ပြီး စက်ရုပ်မဆန်ဘဲ အချိတ်အဆက်မိမိ မြန်မာစကားပြောအစစ်ဖြင့် ပြန်ပေးမယ်</div>
             </div>
             <div class="select-card" onclick="selectNarration('third', this)">
                 <div class="sc-title">Third Person (Movie Recap ဇာတ်ကြောင်းပြောပုံစံ)</div>
@@ -638,11 +638,11 @@ APP_HTML = f"""
             </div>
 
             <button class="btn-primary" id="step1TranslateBtn" onclick="step1TranslateToNaturalBurmese()" style="margin-top:8px;">
-                👁️ ၁။ Gemini ဖြင့် Video ကြည့်ပြီး မြန်မာ Script ထုတ်မယ်
+                🪄 ၁။ မြန်မာဘာသာပြန် Script ထုတ်မယ် (Auto Model Rotate)
             </button>
 
             <div class="progress-card" id="step1ProgCard">
-                <div class="prog-step-txt" id="step1Title">⏳ Gemini Vision ဖြင့် ဘာသာပြန်နေပါသည်...</div>
+                <div class="prog-step-txt" id="step1Title">⏳ စတင်နေပါသည်...</div>
                 <div class="prog-bar-bg"><div class="prog-bar-fill" id="step1Fill"></div></div>
                 <div class="prog-sub-txt" id="step1Detail">...</div>
             </div>
@@ -1090,7 +1090,11 @@ window.addEventListener('touchend', handleUp);
 // ==================== 60FPS 9:16 CANVAS RENDER LOOP ====================
 function cleanMyanmarText(txt) {{
     if (!txt) return "";
-    return String(txt).replace(/[\u200b\u200c\u200d\ufeff]/g, "").replace(/["'“”‘’]/g, "").trim();
+    return String(txt)
+        .replace(/[\u200b\u200c\u200d\ufeff]/g, "")
+        .replace(/\\[\\d+(\\.\\d+)?s\\]/gi, "")
+        .replace(/["'“”‘’*#]/g, "")
+        .trim();
 }}
 
 function hasMyanmarCharacters(txt) {{
@@ -1301,26 +1305,34 @@ function pickSubColor(clr, el) {{
     el.innerText = '✓';
 }}
 
-// ==================== STEP 1: GEMINI FULL-STORYBOARD VISION & NATURAL BURMESE SCRIPT ====================
-async function captureVideoKeyframesBase64(vidEl, count = 8) {{
+// ==================== STEP 1: MULTI-MODEL ROTATION + AUTO WAIT & RETRY + NATURAL BURMESE ====================
+async function sleepWithCountdown(seconds, titlePrefix, updateProg, currentPct) {{
+    for (let s = seconds; s > 0; s--) {{
+        updateProg(currentPct, titlePrefix, `⏳ API Limit ခေတ္တပြည့်သွားသဖြင့် (${{s}}) စက္ကန့် စောင့်ဆိုင်းပြီး အလိုအလျောက် ပြန်လည်ဘာသာပြန်ပေးနေပါသည်...`);
+        await new Promise(r => setTimeout(r, 1000));
+    }}
+}}
+
+// Token Limit (TPM) မပြည့်စေရန် အဓိက ဇာတ်ဝင်ခန်းပုံ (၂) ပုံကိုသာ 240x426 သေးသေးလေး ဖမ်းယူခြင်း
+async function captureCompactKeyframesBase64(vidEl, count = 2) {{
     const frames = [];
     const origTime = vidEl.currentTime;
     const dur = Math.max(1.0, vidEl.duration || 10.0);
     const tmpCanvas = document.createElement('canvas');
-    tmpCanvas.width = 320;
-    tmpCanvas.height = 568;
+    tmpCanvas.width = 240;
+    tmpCanvas.height = 426;
     const tCtx = tmpCanvas.getContext('2d');
 
     for (let i = 0; i < count; i++) {{
-        const targetT = Math.min(dur - 0.15, (dur / (count + 1)) * (i + 1));
+        const targetT = Math.min(dur - 0.2, (dur / (count + 1)) * (i + 1));
         vidEl.currentTime = targetT;
         await new Promise(res => {{
             const onSeek = () => {{ vidEl.removeEventListener('seeked', onSeek); res(); }};
             vidEl.addEventListener('seeked', onSeek);
-            setTimeout(res, 350);
+            setTimeout(res, 300);
         }});
         tCtx.drawImage(vidEl, 0, 0, tmpCanvas.width, tmpCanvas.height);
-        const b64 = tmpCanvas.toDataURL('image/jpeg', 0.65).split(',')[1];
+        const b64 = tmpCanvas.toDataURL('image/jpeg', 0.5).split(',')[1];
         if (b64) frames.push(b64);
     }}
     vidEl.currentTime = origTime;
@@ -1356,28 +1368,30 @@ async function extractFastAudioBlob(file) {{
     return new Blob([wavBuf], {{ type: 'audio/wav' }});
 }}
 
-// စာကြောင်းအားလုံးကို တစ်စုတစ်စည်းတည်း (Full Story Context) ဖြင့် သဘာဝကျကျ မြန်မာစကားပြောသို့ ပြန်ဆိုခြင်း
-async function translateFullStoryWithGeminiVision(allSegments, keyframesB64, geminiKey, groqKey, styleMode, updateProg) {{
-    let rolePrompt = "";
+// 100% ချောမွေ့သော မြန်မာစကားပြော ထွက်စေမည့် Master Burmese Prompt & Multi-Model Rotation Engine
+async function translateScriptWithModelRotation(allSegments, keyframesB64, geminiKey, groqKey, styleMode, updateProg) {{
+    let styleInstruction = "";
     if (styleMode === 'third') {{
-        rolePrompt = `သင်သည် နာမည်ကြီး မြန်မာ Movie Recap YouTuber / ဇာတ်ကြောင်းပြောသူ ဖြစ်သည်။
-ပေးထားသော ဗီဒီယိုဇာတ်ဝင်ခန်း ပုံရိပ်များနှင့် မူရင်းစကားပြောများကို ကြည့်ပြီး ပြင်ပဇာတ်ကြောင်းပြောသူ (Third-Person Narrator) အနေဖြင့် အစအဆုံး အချိတ်အဆက်မိမိ၊ ဆွဲဆောင်မှုရှိရှိ မြန်မာစကားပြောအစစ် (Spoken Burmese) ဖြင့် ပြန်လည်ရေးသားပေးပါ။`;
+        styleInstruction = `ပြင်ပဇာတ်ကြောင်းပြောသူ (Movie Recap Narrator) အနေဖြင့် ဖြစ်စဉ်ကို ပရိသတ်စိတ်ဝင်စားအောင် သွက်သွက်လက်လက် ပြောပြသည့် သဘာဝမြန်မာစကားပြော ("သူကတော့..."၊ "...လိုက်ပါတော့တယ်"၊ "...ခဲ့တာပေါ့") ပုံစံဖြင့် ပြန်ဆိုပါ။`;
     }} else if (styleMode === 'first') {{
-        rolePrompt = `သင်သည် ဤဗီဒီယိုထဲမှ အဓိကဇာတ်ကောင် ဖြစ်သည်။
-ပေးထားသော ဗီဒီယိုဇာတ်ဝင်ခန်း ပုံရိပ်များနှင့် မူရင်းစကားပြောများကို ကြည့်ပြီး အဓိကဇာတ်ကောင် ကိုယ်တိုင် ('ကျွန်တော်/ကျွန်မ') ခံစားချက်အပြည့်ဖြင့် ပြောပြနေသည့် သဘာဝ မြန်မာစကားပြောအစစ် (First-Person Spoken Burmese) ဖြင့် ပြန်လည်ရေးသားပေးပါ။`;
+        styleInstruction = `အဓိကဇာတ်ကောင် ကိုယ်တိုင် ("ကျွန်တော်/ကျွန်မ") က ကိုယ့်အဖြစ်အပျက်ကို ခံစားချက်အပြည့်ဖြင့် ပြန်ပြောပြနေသည့် သဘာဝမြန်မာစကားပြော ပုံစံဖြင့် ပြန်ဆိုပါ။`;
     }} else {{
-        rolePrompt = `သင်သည် ဝါရင့် မြန်မာရုပ်ရှင် စကားပြောဘာသာပြန် ပညာရှင် ဖြစ်သည်။
-ပေးထားသော ဗီဒီယိုဇာတ်ဝင်ခန်း ပုံရိပ်များကို ကြည့်ပြီး ဇာတ်ကောင်များ၏ အသက်အရွယ်၊ ဆက်ဆံရေးနှင့် လိုက်ဖက်အောင် မူရင်းစကားပြောများကို သဘာဝကျသော နေ့စဉ်သုံး မြန်မာစကားပြောအစစ် (Natural Colloquial Spoken Burmese) သို့ ချောမွေ့စွာ ဘာသာပြန်ပေးပါ။`;
+        styleInstruction = `မူရင်းဇာတ်ကောင်များ ပြောဆိုနေသည့် အဓိပ္ပာယ်နှင့် လေသံအတိုင်း မြန်မာရုပ်ရှင် စကားပြော (Natural Spoken Burmese Dialogue) အဖြစ် သဘာဝကျကျ ပြန်ဆိုပါ။`;
     }}
 
-    const strictRules = `
-အထူးလိုက်နာရမည့် စည်းကမ်းချက်များ -
-၁။ စက်ရုပ်ဆန်သော စာ어 (Literal word-for-word translation) လုံးဝ မသုံးရပါ။ ("သည်၊ ၏၊ ၌၊ ၎င်း" လုံးဝ မသုံးရပါ။ "တယ်၊ တာပေါ့၊ လိုက်တယ်၊ ခဲ့တယ်" စသည့် သဘာဝစကားပြောသာ သုံးပါ)။
-၂။ ရှေ့စာကြောင်းနှင့် နောက်စာကြောင်း ဇာတ်လမ်းအချိတ်အဆက် ချောမွေ့နေရမည်။
-၃။ စာကြောင်းတစ်ကြောင်းချင်းစီ၏ ကြာချိန် (Duration) အတွင်း အသံထွက်ဖတ်၍ အံဝင်ခွင်ကျဖြစ်အောင် ကျစ်လျစ်သပ်ရပ်စွာ ရေးပါ။
-၄။ မူရင်း နံပါတ်စဉ် (1., 2., 3., ...) အတိုင်း တစ်ကြောင်းချင်းစီ မြန်မာလိုချည်းသာ ပြန်ပေးပါ။ အခြား ရှင်းလင်းချက် လုံးဝ မထည့်ရပါ။`;
+    const masterPrompt = `သင်သည် အတွေ့အကြုံရင့်ကျက်သော မြန်မာရုပ်ရှင် ဇာတ်ညွှန်းနှင့် Movie Recap ဘာသာပြန်ပညာရှင် ဖြစ်ပါသည်။
+အောက်တွင် Whisper AI မှ နားထောင်ထားသော မူရင်းဗီဒီယို စာကြောင်းများ ပေးထားပါသည်။
 
-    const parseNumberedOutput = (rawText, totalCount) => {{
+${{styleInstruction}}
+
+မဖြစ်မနေ လိုက်နာရမည့် စည်းမျဉ်းများ -
+၁။ စာလုံးတိုက်ရိုက် ဘာသာပြန်ခြင်း (Literal translation) လုံးဝ မလုပ်ရပါ။ မြန်မာလူမျိုး အချင်းချင်း နေ့စဉ်ပြောဆိုသည့် သဘာဝကျပြီး ချောမွေ့သော စကားပြောအစစ် ("တယ်၊ တာပေါ့၊ လိုက်တယ်၊ ပါတယ်၊ ခဲ့တယ်") ကိုသာ သုံးပါ။ စာ어 ("သည်၊ ၏၊ ၌၊ ၎င်း") လုံးဝ မသုံးရပါ။
+၂။ Whisper မှ နားထောင်ထားသော မူရင်းစာသားတွင် စာလုံးပေါင်းအမှားပါနေပါက ရှေ့နောက်ဇာတ်လမ်းအသွားအလာကို ကြည့်၍ အဓိပ္ပာယ်အမှန်ဆုံးဖြစ်အောင် ပြင်ဆင်ဘာသာပြန်ပါ။
+၃။ မူရင်း နံပါတ်စဉ် (1., 2., 3., ...) အတိုင်း တစ်ကြောင်းချင်းစီ အတိအကျ မြန်မာလိုချည်းသာ ပြန်ပေးပါ။
+
+ဘာသာပြန်ရမည့် စာကြောင်းများ -`;
+
+    const parseNumberedLines = (rawText, count) => {{
         if (!rawText) return null;
         const map = {{}};
         const lines = rawText.split(/\\r?\\n/);
@@ -1385,43 +1399,53 @@ async function translateFullStoryWithGeminiVision(allSegments, keyframesB64, gem
             const m = line.trim().match(/^(\\d+)[\\.\\)\\-\\:]\\s*(.+)$/);
             if (m) {{
                 const idx = parseInt(m[1], 10) - 1;
-                const txt = cleanMyanmarText(m[2]);
-                if (idx >= 0 && idx < totalCount && hasMyanmarCharacters(txt)) {{
-                    map[idx] = txt;
+                const cleanTxt = cleanMyanmarText(m[2]);
+                if (idx >= 0 && idx < count && hasMyanmarCharacters(cleanTxt)) {{
+                    map[idx] = cleanTxt;
                 }}
             }}
         }}
-        return Object.keys(map).length >= Math.max(1, Math.floor(totalCount * 0.6)) ? map : null;
+        return Object.keys(map).length >= Math.max(1, Math.floor(count * 0.55)) ? map : null;
     }};
 
-    // စာကြောင်းအားလုံးကို 40 စီ (Context အပြည့်အဝမိအောင်) ခွဲ၍ ပို့ပေးခြင်း
+    // Model (၆) ခု အလှည့်ကျ သုံးမည့် စာရင်း (3.5 မှ စတင်သည်)
+    const geminiModelRotation = [
+        'gemini-3.5-flash',
+        'gemini-2.5-flash',
+        'gemini-2.5-flash-lite',
+        'gemini-2.0-flash',
+        'gemini-2.0-flash-lite',
+        'gemini-1.5-flash'
+    ];
+    const groqModelRotation = [
+        'llama-3.3-70b-versatile',
+        'llama-3.1-8b-instant'
+    ];
+
     const finalMap = {{}};
-    const chunkSize = 40;
-    const geminiModels = ['gemini-2.5-flash', 'gemini-2.5-pro', 'gemini-2.0-flash'];
+    // 80 lines တစ်ခါတည်း ပို့သဖြင့် ၄ မိနစ်စာ ဗီဒီယိုတစ်ပုဒ်လုံးကို Request (၁) ကြိမ်တည်းဖြင့် ပြီးစီးပြီး Limit မထိတော့ပါ
+    const batchSize = 80;
 
-    for (let startIdx = 0; startIdx < allSegments.length; startIdx += chunkSize) {{
-        const subSegs = allSegments.slice(startIdx, startIdx + chunkSize);
-        const pct = Math.min(92, 45 + Math.round((startIdx / allSegments.length) * 45));
-        updateProg(pct, "👁️ Gemini Vision ဖြင့် ဇာတ်လမ်းအချိတ်အဆက်မိအောင် ပြန်ဆိုနေသည်", `စာကြောင်း (${{startIdx + 1}} မှ ${{startIdx + subSegs.length}}) ကို သဘာဝ မြန်မာစကားပြောသို့ ပြန်နေပါသည်...`);
+    for (let startIdx = 0; startIdx < allSegments.length; startIdx += batchSize) {{
+        const subSegs = allSegments.slice(startIdx, startIdx + batchSize);
+        const numberedInput = subSegs.map((s, i) => `${{i + 1}}. ${{s.text}}`).join("\\n");
+        let translatedMap = null;
 
-        const scriptBlock = subSegs.map((s, i) => {{
-            const dur = Math.max(0.5, s.end - s.start).toFixed(1);
-            return `${{i + 1}}. [${{dur}}s] ${{s.text}}`;
-        }}).join("\\n");
+        // ၁။ Gemini Models များကို တစ်ခုပြီးတစ်ခု လှည့်သုံးခြင်း
+        for (let mIdx = 0; mIdx < geminiModelRotation.length; mIdx++) {{
+            const modelName = geminiModelRotation[mIdx];
+            const pct = Math.min(88, 40 + mIdx * 6);
+            updateProg(pct, `🤖 Model: ${{modelName}}`, `Whisper Script (${{subSegs.length}} ကြောင်း) ကို ချောမွေ့သော မြန်မာစကားပြောသို့ ပြန်နေပါသည်...`);
 
-        let chunkTranslated = null;
-
-        for (const mName of geminiModels) {{
             try {{
                 const parts = [];
-                if (startIdx === 0 && keyframesB64.length > 0) {{
+                // ပထမဆုံး Model တွင်သာ ပုံထည့်ပြီး Limit ထိပါက Text-Only ဖြင့် ပေါ့ပါးစွာ ပို့မည်
+                if (mIdx <= 1 && startIdx === 0 && keyframesB64.length > 0) {{
                     keyframesB64.forEach(b64 => parts.push({{ inlineData: {{ mimeType: "image/jpeg", data: b64 }} }}));
                 }}
-                parts.push({{
-                    text: `${{rolePrompt}}\\n${{strictRules}}\\n\\nအောက်ပါ စာကြောင်း (${{subSegs.length}}) ကြောင်းကို နံပါတ်စဉ် 1. မှ ${{subSegs.length}}. အတိုင်း သဘာဝကျသော မြန်မာစကားပြောဖြင့် ပြန်ပေးပါ ([...s] အချိန်ကွင်းစကွင်းပိတ် ပြန်ထည့်ရန်မလိုပါ):\\n\\n${{scriptBlock}}`
-                }});
+                parts.push({{ text: `${{masterPrompt}}\\n\\n${{numberedInput}}` }});
 
-                const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/${{mName}}:generateContent?key=${{geminiKey}}`;
+                const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/${{modelName}}:generateContent?key=${{geminiKey}}`;
                 const gResp = await fetch(gUrl, {{
                     method: 'POST',
                     headers: {{ 'Content-Type': 'application/json' }},
@@ -1434,38 +1458,51 @@ async function translateFullStoryWithGeminiVision(allSegments, keyframesB64, gem
                 if (gResp.ok) {{
                     const gJson = await gResp.json();
                     const candText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-                    chunkTranslated = parseNumberedOutput(candText, subSegs.length);
-                    if (chunkTranslated) break;
+                    translatedMap = parseNumberedLines(candText, subSegs.length);
+                    if (translatedMap) break;
+                }} else if (gResp.status === 429 || gResp.status === 503) {{
+                    // Limit ထိပါက စက္ကန့်ခဏစောင့်ပြီး နောက် Model တစ်ခုသို့ အလိုအလျောက် ပြောင်းမည်
+                    await sleepWithCountdown(4, `🔄 ${{modelName}} Limit ပြည့်နေသည်`, updateProg, pct);
                 }}
-            }} catch (e) {{
-                console.warn(`Gemini ${{mName}} error:`, e);
+            }} catch (err) {{
+                console.warn(`Model ${{modelName}} skipped:`, err);
             }}
         }}
 
-        // အကယ်၍ Gemini Server ကျပ်နေပါက Groq Llama-3.3-70B က ဇာတ်လမ်းအချိတ်အဆက်မိအောင် ချက်ချင်း တာဝန်ယူပြန်ပေးမည်
-        if (!chunkTranslated) {{
-            const bResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {{
-                method: 'POST',
-                headers: {{ 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [
-                        {{ role: 'system', content: `${{rolePrompt}}\\n${{strictRules}}` }},
-                        {{ role: 'user', content: `Translate these ${{subSegs.length}} lines into natural spoken Burmese keeping exact numbers 1. to ${{subSegs.length}}. (do not include the [..s] duration tag in output):\\n\\n${{scriptBlock}}` }}
-                    ],
-                    temperature: 0.35
-                }})
-            }});
-            if (bResp.ok) {{
-                const bJson = await bResp.json();
-                const contentTxt = bJson?.choices?.[0]?.message?.content || "";
-                chunkTranslated = parseNumberedOutput(contentTxt, subSegs.length);
+        // ၂။ အကယ်၍ Gemini Key တစ်ခုလုံး Daily Quota ကုန်နေပါက Groq AI Models များဖြင့် အလိုအလျောက် လှည့်သုံးပြီး ချောမွေ့စွာ ဘာသာပြန်ပေးမည်
+        if (!translatedMap) {{
+            for (const gModel of groqModelRotation) {{
+                updateProg(90, `🔄 Backup AI (${{gModel}})`, `Gemini Quota ပြည့်နေသဖြင့် ${{gModel}} ဖြင့် ချောမွေ့သော မြန်မာစကားပြော ပြန်ဆိုနေပါသည်...`);
+                try {{
+                    const bResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {{
+                        method: 'POST',
+                        headers: {{ 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' }},
+                        body: JSON.stringify({{
+                            model: gModel,
+                            messages: [
+                                {{ role: 'system', content: masterPrompt }},
+                                {{ role: 'user', content: numberedInput }}
+                            ],
+                            temperature: 0.35
+                        }})
+                    }});
+                    if (bResp.ok) {{
+                        const bJson = await bResp.json();
+                        const contentTxt = bJson?.choices?.[0]?.message?.content || "";
+                        translatedMap = parseNumberedLines(contentTxt, subSegs.length);
+                        if (translatedMap) break;
+                    }} else if (bResp.status === 429) {{
+                        await sleepWithCountdown(5, `⏳ Groq Limit စောင့်ဆိုင်းနေသည်`, updateProg, 90);
+                    }}
+                }} catch (err) {{
+                    console.warn("Groq rotation error:", err);
+                }}
             }}
         }}
 
-        if (chunkTranslated) {{
-            Object.keys(chunkTranslated).forEach(k => {{
-                finalMap[startIdx + parseInt(k, 10)] = chunkTranslated[k];
+        if (translatedMap) {{
+            Object.keys(translatedMap).forEach(k => {{
+                finalMap[startIdx + parseInt(k, 10)] = translatedMap[k];
             }});
         }}
     }}
@@ -1494,10 +1531,10 @@ async function step1TranslateToNaturalBurmese() {{
 
     try {{
         isTtsReady = false;
-        updateProg(12, "👁️ Video ဇာတ်ဝင်ခန်း (၈) ကွက် ဖမ်းယူနေသည်", "Gemini က ဇာတ်လမ်းအခြေအနေကို နားလည်စေရန် ဗီဒီယိုပုံရိပ်များကို ဆွဲထုတ်နေပါသည်...");
-        const keyframesB64 = await captureVideoKeyframesBase64(video, 8);
+        updateProg(12, "👁️ Video ပုံရိပ် ဖမ်းယူနေသည်", "Token Limit မပြည့်စေရန် အဓိက ဇာတ်ဝင်ခန်းပုံ (၂) ပုံကို ပေါ့ပါးစွာ ဆွဲထုတ်နေပါသည်...");
+        const keyframesB64 = await captureCompactKeyframesBase64(video, 2);
 
-        updateProg(28, "🎧 အသံထုတ်ယူပြီး Whisper AI နားထောင်နေသည်", "ဗီဒီယိုထဲမှ စကားပြောချိန်များကို Groq Whisper ဖြင့် ထုတ်ယူနေပါသည်...");
+        updateProg(25, "🎧 Whisper AI ဖြင့် အသံနားထောင်နေသည်", "ဗီဒီယိုထဲမှ မူရင်းစကားပြော Script ကို ထုတ်ယူနေပါသည်...");
         const wavBlob = await extractFastAudioBlob(currentVideoFile);
 
         const formData = new FormData();
@@ -1515,14 +1552,13 @@ async function step1TranslateToNaturalBurmese() {{
         const rawSegs = (wData && Array.isArray(wData.segments)) ? wData.segments : [];
         if (rawSegs.length === 0) throw new Error("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ။");
 
-        // တိုလွန်းသော စာကြောင်းစုလေးများကို ရှေ့နောက် အဓိပ္ပာယ်ပြည့်စုံအောင် ပေါင်းစပ်ခြင်း
         const mergedRaw = [];
         for (const s of rawSegs) {{
             const st = parseFloat(Number(s.start || 0).toFixed(2));
             const et = parseFloat(Number(s.end || (st + 2)).toFixed(2));
             const txt = String(s.text || "").trim();
             if (!txt) continue;
-            if (mergedRaw.length > 0 && (st - mergedRaw[mergedRaw.length - 1].end <= 0.35) && (et - mergedRaw[mergedRaw.length - 1].start <= 5.5)) {{
+            if (mergedRaw.length > 0 && (st - mergedRaw[mergedRaw.length - 1].end <= 0.4) && (et - mergedRaw[mergedRaw.length - 1].start <= 5.8)) {{
                 mergedRaw[mergedRaw.length - 1].end = et;
                 mergedRaw[mergedRaw.length - 1].text += " " + txt;
             }} else {{
@@ -1530,7 +1566,7 @@ async function step1TranslateToNaturalBurmese() {{
             }}
         }}
 
-        const storyTransMap = await translateFullStoryWithGeminiVision(mergedRaw, keyframesB64, geminiKey, groqKey, narrationStyle, updateProg);
+        const storyTransMap = await translateScriptWithModelRotation(mergedRaw, keyframesB64, geminiKey, groqKey, narrationStyle, updateProg);
 
         const finalSegs = [];
         for (let i = 0; i < mergedRaw.length; i++) {{
@@ -1548,14 +1584,14 @@ async function step1TranslateToNaturalBurmese() {{
         }}
 
         if (finalSegs.length === 0) {{
-            throw new Error("Gemini API Key သို့မဟုတ် Quota ကန့်သတ်ချက် ပြည့်နေပါသည်။ Key အသစ် စစ်ဆေးပေးပါ။");
+            throw new Error("API Models အားလုံး ခေတ္တ Limit ပြည့်နေပါသည်။ ၁၀ စက္ကန့်ခန့် စောင့်ပြီး ပြန်နှိပ်ပေးပါ။");
         }}
 
         segments = finalSegs;
         updateProg(100, "✅ အဆင့် (၁) သဘာဝ မြန်မာဘာသာပြန် Script ပြီးဆုံးပါပြီ!", `စုစုပေါင်း မြန်မာစာကြောင်း (${{segments.length}}) ကြောင်းကို ချောမွေ့စွာ ပြန်ဆိုပြီးပါပြီ။ အောက်တွင် ဖတ်ကြည့်နိုင်ပါသည်။`);
 
         previewBox.style.display = 'block';
-        previewBox.innerHTML = segments.map((s, idx) => `<div style="margin-bottom:4px;"><b>${{idx + 1}}. [${{fmtTime(s.start)}} - ${{fmtTime(s.end)}}]</b> ${{s.text}}</div>`).join('');
+        previewBox.innerHTML = segments.map((s, idx) => `<div style="margin-bottom:5px;"><b>${{idx + 1}}. [${{fmtTime(s.start)}} - ${{fmtTime(s.end)}}]</b> ${{s.text}}</div>`).join('');
     }} catch (err) {{
         updateProg(100, "❌ Error ဖြစ်ပွားပါသည်", err.message || String(err));
     }}
@@ -1605,7 +1641,7 @@ async function step2GenerateBurmeseTTS() {{
             tempAud.preload = "metadata";
             tempAud.onloadedmetadata = () => resolve(tempAud.duration || (txt.length / 11.0));
             tempAud.onerror = () => resolve(txt.length / 11.0);
-            setTimeout(() => resolve(txt.length / 11.0), 1200);
+            setTimeout(() => resolve(txt.length / 11.0), 1000);
             tempAud.src = url;
         }});
 
@@ -1639,7 +1675,6 @@ async function step2GenerateBurmeseTTS() {{
 let lastPlayedSegIdx = -1;
 function syncSmartVideoAndVoice(curTime) {{
     if (video.paused) return;
-    // မူရင်း Video အသံကို အမြဲ 0% ပိတ်ထားသည်
     video.muted = true;
     video.volume = 0.0;
 
@@ -1681,7 +1716,7 @@ function syncSmartVideoAndVoice(curTime) {{
     }}
 }}
 
-// ==================== STEP 3 (CARD 4): SMART SYNC RENDER VIDEO (MUTE ORIGINAL AUDIO) ====================
+// ==================== STEP 3 (CARD 4): SMART SYNC RENDER VIDEO ====================
 function downloadSRTFile() {{
     const fmtSrt = (s) => {{
         const hrs = Math.floor(s / 3600);
