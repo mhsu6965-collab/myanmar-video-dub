@@ -1,5 +1,4 @@
 streamlit
-streamlit-cropper
 groq
 google-genai
 edge-tts
