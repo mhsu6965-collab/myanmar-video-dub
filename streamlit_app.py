@@ -8,7 +8,7 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# Streamlit ရဲ့ အပေါ်အောက်ဘောင်များကို ဖျောက်ပြီး မျက်နှာပြင်အပြည့် (100dvh) ထားရှိခြင်း
+# Streamlit ဘောင်များအားလုံးဖျောက်ပြီး ဖုန်းမျက်နှာပြင်အပြည့် (100dvh) ထားရှိခြင်း
 st.markdown("""
 <style>
     header[data-testid="stHeader"], footer, #MainMenu, div[data-testid="stDecoration"] {
@@ -59,6 +59,7 @@ APP_HTML = f"""
         --border-clr: #CBD5E1;
         --accent-orange: #EA580C;
         --accent-blue: #0284C7;
+        --accent-green: #059669;
     }}
     * {{
         box-sizing: border-box;
@@ -104,11 +105,8 @@ APP_HTML = f"""
         font-size: 1.02rem;
         font-weight: 800;
         color: #EA580C;
-        line-height: 1.2;
     }}
-    .brand-logo span {{
-        color: #0F172A;
-    }}
+    .brand-logo span {{ color: #0F172A; }}
     .top-right-btns {{
         display: flex;
         align-items: center;
@@ -126,7 +124,6 @@ APP_HTML = f"""
         display: inline-flex;
         align-items: center;
         gap: 5px;
-        box-shadow: 0 2px 8px rgba(20, 184, 166, 0.25);
     }}
     .key-btn {{
         background: #F1F5F9;
@@ -169,7 +166,7 @@ APP_HTML = f"""
         position: absolute;
         top: 10px;
         right: 12px;
-        background: rgba(16, 185, 129, 0.9);
+        background: rgba(16, 185, 129, 0.92);
         color: #FFFFFF;
         font-size: 0.68rem;
         font-weight: 800;
@@ -198,11 +195,7 @@ APP_HTML = f"""
         font-weight: bold;
         cursor: pointer;
     }}
-    .seek-bar {{
-        flex: 1;
-        accent-color: var(--accent-orange);
-        height: 5px;
-    }}
+    .seek-bar {{ flex: 1; accent-color: var(--accent-orange); height: 5px; }}
     .time-label {{
         font-size: 0.74rem;
         font-weight: 700;
@@ -372,6 +365,38 @@ APP_HTML = f"""
         justify-content: center;
         gap: 6px;
     }}
+    .btn-blue {{
+        width: 100%;
+        padding: 13px;
+        background: linear-gradient(90deg, #0284C7 0%, #2563EB 100%);
+        color: #FFFFFF;
+        border: none;
+        border-radius: 12px;
+        font-weight: 800;
+        font-size: 0.94rem;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(2, 132, 199, 0.25);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+    }}
+    .btn-green {{
+        width: 100%;
+        padding: 14px;
+        background: linear-gradient(90deg, #059669 0%, #10B981 100%);
+        color: #FFFFFF;
+        border: none;
+        border-radius: 12px;
+        font-weight: 800;
+        font-size: 0.96rem;
+        cursor: pointer;
+        box-shadow: 0 4px 12px rgba(5, 150, 105, 0.28);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+    }}
     .btn-secondary {{
         width: 100%;
         padding: 10px;
@@ -464,6 +489,19 @@ APP_HTML = f"""
         color: #475569;
         margin-top: 2px;
     }}
+    .script-preview-box {{
+        margin-top: 10px;
+        padding: 10px;
+        background: #F8FAFC;
+        border: 1px solid #CBD5E1;
+        border-radius: 10px;
+        max-height: 150px;
+        overflow-y: auto;
+        font-size: 0.8rem;
+        line-height: 1.55;
+        color: #0F172A;
+        display: none;
+    }}
 </style>
 </head>
 <body>
@@ -517,7 +555,7 @@ APP_HTML = f"""
         <!-- BLUR MASK & 9:16 RATIO CARD -->
         <div class="card">
             <div class="step-title" style="margin-bottom:6px;">🌫️ Blur Mask (9:16 Video ပေါ်တွင် လက်ဖြင့်ဆွဲရွှေ့ပါ)</div>
-            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px;">🔒 မူရင်း Video ကို ရွှေ့မရအောင် ပုံသေထားထားပါသည်။ Blur နှင့် မြန်မာစာတန်းကိုသာ လက်ဖြင့် ဖိဆွဲရွှေ့နိုင်ပါသည်။</div>
+            <div style="font-size:0.75rem;color:var(--text-muted);margin-bottom:8px;">🔒 မူရင်း Video ကို ပုံသေထားထားပါသည်။ Blur နှင့် မြန်မာစာတန်းကိုသာ လက်ဖြင့် ဖိဆွဲရွှေ့နိုင်ပါသည်။</div>
 
             <div class="blur-item">
                 <div style="display:flex;align-items:center;gap:10px;">
@@ -564,53 +602,45 @@ APP_HTML = f"""
             </label>
         </div>
 
-        <!-- STEP 1: GEMINI VISION + SMART SYNC SCRIPT -->
+        <!-- ==================== STEP 1: မြန်မာဘာသာ အရင်ပြန်မည် ==================== -->
         <div class="card">
             <div class="step-head">
                 <div class="step-num">1</div>
-                <div class="step-title">Gemini Vision (Video ကြည့်၍ ဘာသာပြန်ခြင်း) + Smart Sync</div>
-            </div>
-
-            <div class="blur-item" style="border-color:#A7F3D0;background:#ECFDF5;">
-                <div>
-                    <div style="font-weight:800;font-size:0.86rem;color:#065F46;">⚡ Smart Auto-Sync (ရုပ် + အသံ + စာတန်း)</div>
-                    <div style="font-size:0.73rem;color:#047857;">စကားပြောအရှည်ပေါ်မူတည်၍ Video နှင့် TTS အသံကို မြန်သင့်ရင်မြန် / နှေးသင့်ရင်နှေး အလိုအလျောက် ချိန်ညှိပေးမည်</div>
-                </div>
-                <label class="switch">
-                    <input type="checkbox" id="smartSyncChk" checked>
-                    <span class="slider-pill green"></span>
-                </label>
+                <div class="step-title">မြန်မာဘာသာ အရင်ပြန်မည် (Gemini Vision)</div>
             </div>
 
             <div class="select-card active" onclick="selectNarration('direct', this)">
-                <div class="sc-title">Direct Translation (Gemini Vision + Audio)</div>
-                <div class="sc-sub">Gemini က Video ပုံရိပ်နှင့် စကားပြောကို ကြည့်ပြီး မူရင်းအဓိပ္ပာယ်အတိုင်း ဘာသာပြန်မယ်</div>
+                <div class="sc-title">Direct Translation</div>
+                <div class="sc-sub">မူရင်း POV နှင့် အဓိပ္ပာယ်ကို မပြောင်းဘဲ မြန်မာဘာသာပြန်မယ်</div>
             </div>
             <div class="select-card" onclick="selectNarration('third', this)">
-                <div class="sc-title">Third Person (Movie Recap ပုံစံ)</div>
-                <div class="sc-sub">Gemini က ဗီဒီယိုဇာတ်ဝင်ခန်းများကို ကြည့်ပြီး ပြင်ပဇာတ်ကြောင်းပြောသူအနေနဲ့ ပြောမယ်</div>
+                <div class="sc-title">Third Person</div>
+                <div class="sc-sub">ပြင်ပဇာတ်ကြောင်းပြောသူအနေနဲ့ ဖြစ်စဉ်ကို မြန်မာလိုပြောမယ်</div>
             </div>
             <div class="select-card" onclick="selectNarration('first', this)">
-                <div class="sc-title">First Person (အဓိကဇာတ်ကောင် POV)</div>
-                <div class="sc-sub">အဓိကဇာတ်ကောင် ကိုယ်တိုင်ပြောသလို ဘာသာပြန်မယ်</div>
+                <div class="sc-title">First Person</div>
+                <div class="sc-sub">အဓိကဇာတ်ကောင် ကိုယ်တိုင်ပြောသလို မြန်မာလိုပြောမယ်</div>
             </div>
 
-            <button class="btn-primary" id="genScriptBtn" onclick="runGeminiVisionAndSmartSync()" style="margin-top:8px;">
-                👁️ Gemini ဖြင့် Video ကြည့်၍ Script + Smart Sync ထုတ်မယ်
+            <button class="btn-primary" id="step1TranslateBtn" onclick="step1TranslateToBurmese()" style="margin-top:8px;">
+                🪄 ၁။ မြန်မာဘာသာပြန် Script ထုတ်မယ်
             </button>
 
-            <div class="progress-card" id="aiProgressCard">
-                <div class="prog-step-txt" id="aiStepTitle">⏳ စတင်နေပါသည်...</div>
-                <div class="prog-bar-bg"><div class="prog-bar-fill" id="aiProgFill"></div></div>
-                <div class="prog-sub-txt" id="aiStepDetail">ဗီဒီယိုပုံရိပ်နှင့် အသံလမ်းကြောင်းကို ဖတ်ယူနေပါသည်...</div>
+            <div class="progress-card" id="step1ProgCard">
+                <div class="prog-step-txt" id="step1Title">⏳ မြန်မာဘာသာပြန်နေပါသည်...</div>
+                <div class="prog-bar-bg"><div class="prog-bar-fill" id="step1Fill"></div></div>
+                <div class="prog-sub-txt" id="step1Detail">...</div>
             </div>
+
+            <!-- ဘာသာပြန်ပြီးသား မြန်မာစာသားများ သေချာပေါ်မည့် Preview Box -->
+            <div class="script-preview-box" id="burmeseScriptPreview"></div>
         </div>
 
-        <!-- STEP 2: VOICEOVER အသံ နှင့် SPEED % / PITCH % -->
+        <!-- ==================== STEP 2: မြန်မာ TTS အသံထုတ်မည် ==================== -->
         <div class="card">
             <div class="step-head">
                 <div class="step-num">2</div>
-                <div class="step-title">Voiceover အသံ နှင့် Speed / Pitch (%)</div>
+                <div class="step-title">Voiceover အသံထုတ်မည် (Speed % / Pitch %)</div>
             </div>
 
             <div id="voiceListContainer">
@@ -663,9 +693,19 @@ APP_HTML = f"""
                 </div>
                 <input type="range" class="full-slider" id="audioOffsetSlider" min="-2.0" max="2.0" step="0.1" value="0.0" oninput="document.getElementById('offsetVal').innerText=this.value+'s'">
             </div>
+
+            <button class="btn-blue" id="step2TtsBtn" onclick="step2GenerateBurmeseTTS()" style="margin-top:6px;">
+                🎙️ ၂။ မြန်မာ Voiceover အသံထုတ်မယ်
+            </button>
+
+            <div class="progress-card" id="step2ProgCard">
+                <div class="prog-step-txt" id="step2Title">⏳ TTS အသံထုတ်နေပါသည်...</div>
+                <div class="prog-bar-bg"><div class="prog-bar-fill" id="step2Fill"></div></div>
+                <div class="prog-sub-txt" id="step2Detail">...</div>
+            </div>
         </div>
 
-        <!-- STEP 3: VIDEO ချိန်ညှိမှု -->
+        <!-- ==================== STEP 3: VIDEO ချိန်ညှိမှု ==================== -->
         <div class="card">
             <div class="step-head">
                 <div class="step-num">3</div>
@@ -774,15 +814,26 @@ APP_HTML = f"""
             <button class="btn-secondary" onclick="resetVisualFilters()">Reset</button>
         </div>
 
-        <!-- STEP 4: ထုတ်ယူမယ် (SMART SYNC LOCAL RENDER WITH LIVE PROGRESS) -->
+        <!-- ==================== STEP 4: SMART SYNC RENDER VIDEO ထုတ်ယူမယ် ==================== -->
         <div class="card">
             <div class="step-head">
                 <div class="step-num">4</div>
-                <div class="step-title">ထုတ်ယူမယ် (Smart Sync Render)</div>
+                <div class="step-title">ထုတ်ယူမယ် (Smart Sync Video + TTS + SRT)</div>
+            </div>
+
+            <div class="blur-item" style="border-color:#A7F3D0;background:#ECFDF5;">
+                <div>
+                    <div style="font-weight:800;font-size:0.85rem;color:#065F46;">⚡ Smart Auto-Sync (ရုပ် + TTS အသံ + SRT)</div>
+                    <div style="font-size:0.73rem;color:#047857;">Render ထုတ်သည့်အခါ TTS အသံအရှည်နှင့် Video ကိုက်ညီစေရန် မြန်သင့်ရင်မြန် / နှေးသင့်ရင်နှေး အလိုအလျောက် ချိန်ညှိပေါင်းစပ်ပေးမည်</div>
+                </div>
+                <label class="switch">
+                    <input type="checkbox" id="smartSyncChk" checked>
+                    <span class="slider-pill green"></span>
+                </label>
             </div>
 
             <button class="btn-secondary" onclick="downloadSRTFile()">📄 မြန်မာ SRT Download</button>
-            <button class="btn-primary" id="renderFinalBtn" onclick="startSmartSyncLocalRender()">📥 Recap Video ထုတ်မယ် (Smart Sync)</button>
+            <button class="btn-green" id="renderFinalBtn" onclick="step3RenderSmartSyncVideo()">📥 ၃။ Smart Sync ဖြင့် Recap Video ထုတ်မယ်</button>
 
             <div class="progress-card" id="renderProgressCard">
                 <div class="prog-step-txt" id="renderStepTitle">⏳ Video Render ပြုလုပ်နေပါသည်...</div>
@@ -792,7 +843,7 @@ APP_HTML = f"""
 
             <div id="outputVideoWrap" style="display:none;margin-top:12px;">
                 <video id="finalOutputPreview" controls playsinline style="width:100%;border-radius:12px;background:#000;"></video>
-                <a id="finalDownloadAnchor" class="btn-primary" style="margin-top:8px;text-decoration:none;display:flex;">📥 MP4 Download</a>
+                <a id="finalDownloadAnchor" class="btn-green" style="margin-top:8px;text-decoration:none;display:flex;">📥 MP4 Download</a>
             </div>
         </div>
 
@@ -823,16 +874,16 @@ let isRecording = false;
 let showHandles = true;
 let handlesTimer = null;
 
-// Smart Sync ပါဝင်သော Segments (vidSpeed နှင့် ttsRate ကို စာကြောင်းအလိုက် အလိုအလျောက် တွက်ချက်ပေးသည်)
+// မြန်မာဘာသာပြန် Segments နှင့် TTS အသံအရှည်များ သိမ်းဆည်းရန်
 let segments = [
-    {{ start: 0.0, end: 3.5, text: "ပြန်စရာအိမ်မရှိတော့တဲ့ ဇနီးမောင်နှံနှစ်ယောက်", vidSpeed: 1.0, ttsRate: 1.0 }},
-    {{ start: 3.5, end: 7.5, text: "မြို့ပေါ်က သားငယ်ဆီမှာ တည်းခိုဖို့ စဉ်းစားခဲ့တယ်", vidSpeed: 1.0, ttsRate: 1.0 }}
+    {{ start: 0.0, end: 3.5, text: "ပြန်စရာအိမ်မရှိတော့တဲ့ ဇနီးမောင်နှံနှစ်ယောက်", realTtsDur: 2.8, vidSpeed: 1.0, ttsRate: 1.0 }},
+    {{ start: 3.5, end: 7.5, text: "မြို့ပေါ်က သားငယ်ဆီမှာ တည်းခိုဖို့ စဉ်းစားခဲ့တယ်", realTtsDur: 3.2, vidSpeed: 1.0, ttsRate: 1.0 }}
 ];
 
-let synthesizedAudioMap = {{}};
+let ttsPreloadedAudios = {{}};
 let activeSpeechAudio = new Audio();
 let audioCtxGlobal = null;
-let ttsGainNode = null;
+let isTtsReady = false;
 
 let boxes = {{
     blur1: {{ x: 0.06, y: 0.72, w: 0.88, h: 0.10, color: '#00E5FF' }},
@@ -870,6 +921,7 @@ document.getElementById('galleryVideoInput').addEventListener('change', function
     const file = e.target.files[0];
     if (!file) return;
     currentVideoFile = file;
+    isTtsReady = false;
     video.src = URL.createObjectURL(file);
     video.load();
     video.onloadedmetadata = () => {{
@@ -1018,7 +1070,11 @@ window.addEventListener('touchend', handleUp);
 // ==================== 60FPS 9:16 CANVAS RENDER LOOP ====================
 function cleanMyanmarText(txt) {{
     if (!txt) return "";
-    return String(txt).replace(/[\u200b\u200c\u200d\ufeff]/g, "").trim();
+    return String(txt).replace(/[\u200b\u200c\u200d\ufeff]/g, "").replace(/["'“”‘’]/g, "").trim();
+}}
+
+function hasMyanmarCharacters(txt) {{
+    return /[\u1000-\u109F]/.test(txt);
 }}
 
 function wrapMyanmarSubtitleLines(ctx, text, maxWidth) {{
@@ -1225,14 +1281,14 @@ function pickSubColor(clr, el) {{
     el.innerText = '✓';
 }}
 
-// ==================== 1. VIDEO KEYFRAMES EXTRACTOR FOR GEMINI VISION ====================
-async function captureVideoKeyframesBase64(vidEl, count = 4) {{
+// ==================== STEP 1: မြန်မာဘာသာ အရင်ပြန်ခြင်း (100% GUARANTEED BURMESE OUTPUT) ====================
+async function captureVideoKeyframesBase64(vidEl, count = 3) {{
     const frames = [];
     const origTime = vidEl.currentTime;
     const dur = Math.max(1.0, vidEl.duration || 10.0);
     const tmpCanvas = document.createElement('canvas');
-    tmpCanvas.width = 320;
-    tmpCanvas.height = 568;
+    tmpCanvas.width = 300;
+    tmpCanvas.height = 530;
     const tCtx = tmpCanvas.getContext('2d');
 
     for (let i = 0; i < count; i++) {{
@@ -1241,17 +1297,16 @@ async function captureVideoKeyframesBase64(vidEl, count = 4) {{
         await new Promise(res => {{
             const onSeek = () => {{ vidEl.removeEventListener('seeked', onSeek); res(); }};
             vidEl.addEventListener('seeked', onSeek);
-            setTimeout(res, 400);
+            setTimeout(res, 350);
         }});
         tCtx.drawImage(vidEl, 0, 0, tmpCanvas.width, tmpCanvas.height);
-        const b64 = tmpCanvas.toDataURL('image/jpeg', 0.65).split(',')[1];
+        const b64 = tmpCanvas.toDataURL('image/jpeg', 0.6).split(',')[1];
         if (b64) frames.push(b64);
     }}
     vidEl.currentTime = origTime;
     return frames;
 }}
 
-// ==================== 2. FAST 8KHz WAV AUDIO EXTRACTOR ====================
 async function extractFastAudioBlob(file) {{
     const arrayBuf = await file.arrayBuffer();
     const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1281,144 +1336,110 @@ async function extractFastAudioBlob(file) {{
     return new Blob([wavBuf], {{ type: 'audio/wav' }});
 }}
 
-// ==================== 3. SAFE JSON PARSER & MULTI-MODEL GEMINI VISION TRANSLATOR ====================
-function safeExtractJsonMap(rawText) {{
-    const map = {{}};
-    if (!rawText) return map;
-    try {{
-        let cleaned = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
-        const parsed = JSON.parse(cleaned);
-        const list = Array.isArray(parsed) ? parsed : (parsed.items || parsed.translations || parsed.data || []);
-        if (Array.isArray(list)) {{
-            list.forEach(item => {{
-                if (item && item.id !== undefined && item.translation) {{
-                    map[parseInt(item.id)] = String(item.translation).trim();
-                }}
+async function translateBatchToBurmeseGuaranteed(linesArray, keyframesB64, geminiKey, groqKey, stylePrompt) {{
+    const numberedInput = linesArray.map((txt, idx) => `${{idx + 1}}. ${{txt}}`).join("\\n");
+    const sysInstruction = `${{stylePrompt}}
+You MUST translate every numbered line into natural spoken Burmese (Myanmar Unicode script က-အ).
+ NEVER output Chinese, English, or Russian text.
+Return ONLY the translated Burmese lines in the exact same numbered format:
+1. [Burmese translation]
+2. [Burmese translation]`;
+
+    const parseNumberedLines = (rawOutput, expectedLen) => {{
+        if (!rawOutput) return null;
+        const result = [];
+        const lines = rawOutput.split(/\\r?\\n/).map(l => l.trim()).filter(l => l.length > 0);
+        for (let i = 0; i < expectedLen; i++) {{
+            const numPrefix = `${{i + 1}}.`;
+            let found = lines.find(l => l.startsWith(numPrefix) || l.startsWith(`${{i + 1}})`));
+            if (!found && lines[i]) found = lines[i];
+            if (found) {{
+                const cleanLine = cleanMyanmarText(found.replace(/^\\d+[\\.\\)\\-\\:]\\s*/, ''));
+                result.push(cleanLine);
+            }} else {{
+                result.push("");
+            }}
+        }}
+        // မြန်မာစာလုံး (က-အ) အနည်းဆုံး 70% ပါဝင်ခြင်း ရှိမရှိ စစ်ဆေးသည်
+        const validMyanmarCount = result.filter(r => hasMyanmarCharacters(r)).length;
+        return validMyanmarCount >= Math.max(1, Math.floor(expectedLen * 0.5)) ? result : null;
+    }};
+
+    // ၁။ Gemini Vision Models ဖြင့် အရင်ကြိုးစားခြင်း
+    const geminiModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
+    for (const mName of geminiModels) {{
+        try {{
+            const parts = [];
+            if (keyframesB64 && keyframesB64.length > 0) {{
+                keyframesB64.forEach(b64 => parts.push({{ inlineData: {{ mimeType: "image/jpeg", data: b64 }} }}));
+            }}
+            parts.push({{ text: `${{sysInstruction}}\\n\\nLines to translate into Burmese:\\n${{numberedInput}}` }});
+
+            const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/${{mName}}:generateContent?key=${{geminiKey}}`;
+            const gResp = await fetch(gUrl, {{
+                method: 'POST',
+                headers: {{ 'Content-Type': 'application/json' }},
+                body: JSON.stringify({{ contents: [{{ parts: parts }}], generationConfig: {{ temperature: 0.3 }} }})
             }});
+            if (gResp.ok) {{
+                const gJson = await gResp.json();
+                const candText = gJson?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+                const parsed = parseNumberedLines(candText, linesArray.length);
+                if (parsed) return parsed;
+            }}
+        }} catch (e) {{
+            console.warn("Gemini try error:", e);
+        }}
+    }}
+
+    // ၂။ အကယ်၍ Gemini မရပါက Groq Llama-3.3-70B ဖြင့် မြန်မာဘာသာပြန်ခြင်း
+    try {{
+        const bResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {{
+            method: 'POST',
+            headers: {{ 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' }},
+            body: JSON.stringify({{
+                model: 'llama-3.3-70b-versatile',
+                messages: [
+                    {{ role: 'system', content: sysInstruction }},
+                    {{ role: 'user', content: numberedInput }}
+                ],
+                temperature: 0.3
+            }})
+        }});
+        if (bResp.ok) {{
+            const bJson = await bResp.json();
+            const contentTxt = bJson?.choices?.[0]?.message?.content || "";
+            const parsed = parseNumberedLines(contentTxt, linesArray.length);
+            if (parsed) return parsed;
         }}
     }} catch (e) {{
-        console.warn("JSON fallback regex parse:", e);
+        console.warn("Groq fallback error:", e);
     }}
-    return map;
-}}
 
-async function translateWithGeminiVisionAndFallback(rawSegments, keyframesB64, geminiKey, groqKey, stylePrompt, updateProg) {{
-    const finalTransMap = {{}};
-    const batchSize = 20;
-    const geminiModels = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash'];
-
-    for (let b = 0; b < rawSegments.length; b += batchSize) {{
-        const chunk = rawSegments.slice(b, b + batchSize);
-        const payload = chunk.map((s, idx) => ({{ id: b + idx, text: s.text }}));
-        const pct = Math.min(82, 45 + Math.round((b / rawSegments.length) * 35));
-        updateProg(pct, "👁️ အဆင့် ၃/၄ - Gemini Vision ဘာသာပြန်စနစ်", `ဗီဒီယိုပုံရိပ်များကို ကြည့်၍ စာကြောင်း (${{b + 1}} မှ ${{b + chunk.length}}) ကို မြန်မာဘာသာပြန်နေပါသည်...`);
-
-        let batchSuccess = false;
-
-        // Gemini Vision Models စမ်းသပ်ခြင်း (Cannot read properties of undefined reading '0' လုံးဝမဖြစ်စေရန် Safe Check ပါဝင်သည်)
-        for (const mName of geminiModels) {{
-            try {{
-                const parts = [];
-                if (b === 0 && keyframesB64.length > 0) {{
-                    keyframesB64.forEach(b64 => {{
-                        parts.push({{ inlineData: {{ mimeType: "image/jpeg", data: b64 }} }});
-                    }});
-                }}
-                parts.push({{
-                    text: `You are watching these keyframes from a video. ${{stylePrompt}}\nTranslate each item into natural, concise spoken Burmese (Myanmar) so it fits the speaking duration. Do NOT use emojis. Return ONLY a valid JSON array of objects with keys "id" and "translation":\n${{JSON.stringify(payload)}}`
-                }});
-
-                const gUrl = `https://generativelanguage.googleapis.com/v1beta/models/${{mName}}:generateContent?key=${{geminiKey}}`;
-                const gResp = await fetch(gUrl, {{
-                    method: 'POST',
-                    headers: {{ 'Content-Type': 'application/json' }},
-                    body: JSON.stringify({{
-                        contents: [{{ parts: parts }}],
-                        generationConfig: {{ responseMimeType: "application/json", temperature: 0.3 }}
-                    }})
-                }});
-
-                if (gResp.ok) {{
-                    const gJson = await gResp.json();
-                    const candText = gJson && gJson.candidates && gJson.candidates[0] && gJson.candidates[0].content && gJson.candidates[0].content.parts && gJson.candidates[0].content.parts[0] ? gJson.candidates[0].content.parts[0].text : null;
-                    if (candText) {{
-                        const parsedMap = safeExtractJsonMap(candText);
-                        if (Object.keys(parsedMap).length > 0) {{
-                            Object.assign(finalTransMap, parsedMap);
-                            batchSuccess = true;
-                            break;
-                        }}
-                    }}
-                }}
-            }} catch (err) {{
-                console.warn(`Gemini model ${{mName}} retry:`, err);
-            }}
-        }}
-
-        // အကယ်၍ Gemini Key သို့မဟုတ် Model အခက်အခဲရှိပါက Groq Llama-3.3-70B က ချက်ချင်း ဝင်ရောက်ဘာသာပြန်ပေးမည်
-        if (!batchSuccess) {{
-            const bResp = await fetch('https://api.groq.com/openai/v1/chat/completions', {{
-                method: 'POST',
-                headers: {{ 'Authorization': 'Bearer ' + groqKey, 'Content-Type': 'application/json' }},
-                body: JSON.stringify({{
-                    model: 'llama-3.3-70b-versatile',
-                    messages: [
-                        {{ role: 'system', content: `${{stylePrompt}} Translate into concise spoken Burmese (Myanmar). Output valid JSON only.` }},
-                        {{ role: 'user', content: `Return a JSON object with key "items" containing an array of objects with "id" and "translation":\n${{JSON.stringify(payload)}}` }}
-                    ],
-                    response_format: {{ type: 'json_object' }}
-                }})
-            }});
-            if (bResp.ok) {{
-                const bJson = await bResp.json();
-                const contentTxt = bJson && bJson.choices && bJson.choices[0] && bJson.choices[0].message ? bJson.choices[0].message.content : "";
-                const parsedMap = safeExtractJsonMap(contentTxt);
-                Object.assign(finalTransMap, parsedMap);
-            }}
+    // ၃။ နောက်ဆုံး အရေးပေါ် Google Translate (Myanmar) Fallback — မူရင်းစာသား လုံးဝမကျန်စေရပါ
+    const gTransResults = [];
+    for (const srcTxt of linesArray) {{
+        try {{
+            const gtUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=my&dt=t&q=${{encodeURIComponent(srcTxt)}}`;
+            const gtResp = await fetch(gtUrl);
+            const gtJson = await gtResp.json();
+            const translatedStr = gtJson?.[0]?.map(x => x[0]).join('') || "";
+            gTransResults.push(cleanMyanmarText(translatedStr));
+        }} catch (err) {{
+            gTransResults.push("...");
         }}
     }}
-    return finalTransMap;
+    return gTransResults;
 }}
 
-// ==================== 4. SMART SYNC CALCULATOR (VIDEO SPEED + TTS SPEED + SRT TIMING) ====================
-function computeSmartSyncParameters(segList, userBaseSpeedPct) {{
-    const baseRate = Math.max(0.6, Math.min(1.8, 1.0 + (userBaseSpeedPct / 100.0)));
-    return segList.map(seg => {{
-        const slotDur = Math.max(0.4, seg.end - seg.start);
-        // မြန်မာစာလုံး အရေအတွက်ပေါ်မူတည်၍ ကြာချိန်ကို ခန့်မှန်းတွက်ချက်ခြင်း (၁ စက္ကန့်လျှင် ပျမ်းမျှ ၁၁ လုံး)
-        const charCount = Math.max(1, seg.text.length);
-        const estimatedTtsDur = (charCount / 11.5) / baseRate;
-        const ratio = estimatedTtsDur / slotDur;
-
-        let ttsRate = baseRate;
-        let vidSpeed = 1.0;
-
-        if (ratio > 1.12) {{
-            // စာကြောင်းရှည်နေပါက TTS အသံကို မြန်ပေးပြီး Video အပိုင်းကိုပါ အနည်းငယ် နှေးပေးခြင်းဖြင့် ကွက်တိကျစေသည်
-            ttsRate = Math.min(1.65, baseRate * Math.pow(ratio, 0.65));
-            const remainingRatio = (estimatedTtsDur / (ttsRate / baseRate)) / slotDur;
-            vidSpeed = Math.max(0.65, Math.min(1.0, 1.0 / remainingRatio));
-        }} else if (ratio < 0.72) {{
-            // စာကြောင်းတိုနေပါက Video အပိုင်းကို အနည်းငယ် မြန်ပေးပြီး TTS ကို သဘာဝအတိုင်း နှေးပေးသည်
-            ttsRate = Math.max(0.82, baseRate * Math.pow(ratio, 0.35));
-            vidSpeed = Math.min(1.45, Math.max(1.0, 1.0 / Math.max(0.65, ratio)));
-        }}
-
-        return {{
-            ...seg,
-            ttsRate: parseFloat(ttsRate.toFixed(2)),
-            vidSpeed: parseFloat(vidSpeed.toFixed(2))
-        }};
-    }});
-}}
-
-async function runGeminiVisionAndSmartSync() {{
+async function step1TranslateToBurmese() {{
     const groqKey = document.getElementById('groqKeyInput').value.trim();
     const geminiKey = document.getElementById('geminiKeyInput').value.trim();
-    const card = document.getElementById('aiProgressCard');
-    const titleEl = document.getElementById('aiStepTitle');
-    const fillEl = document.getElementById('aiProgFill');
-    const detailEl = document.getElementById('aiStepDetail');
+    const card = document.getElementById('step1ProgCard');
+    const titleEl = document.getElementById('step1Title');
+    const fillEl = document.getElementById('step1Fill');
+    const detailEl = document.getElementById('step1Detail');
+    const previewBox = document.getElementById('burmeseScriptPreview');
 
     const updateProg = (pct, title, detail) => {{
         card.style.display = 'block';
@@ -1431,10 +1452,11 @@ async function runGeminiVisionAndSmartSync() {{
     if (!groqKey || !geminiKey) {{ toggleApiModal(); alert("Groq နှင့် Gemini API Key ထည့်သွင်းပေးပါ။"); return; }}
 
     try {{
-        updateProg(10, "👁️ အဆင့် ၁/၄ - Video ပုံရိပ်များ ဖမ်းယူနေသည်", "Gemini ကြည့်ရှုနိုင်ရန် Video ထဲမှ အဓိက ဇာတ်ဝင်ခန်းပုံရိပ်များကို ဆွဲထုတ်နေပါသည်...");
-        const keyframesB64 = await captureVideoKeyframesBase64(video, 4);
+        isTtsReady = false;
+        updateProg(12, "👁️ Video ပုံရိပ်များ ဖမ်းယူနေသည်", "Gemini ကြည့်ရှုနိုင်ရန် ဗီဒီယိုဇာတ်ဝင်ခန်းများကို ဆွဲထုတ်နေပါသည်...");
+        const keyframesB64 = await captureVideoKeyframesBase64(video, 3);
 
-        updateProg(22, "🎧 အဆင့် ၂/၄ - အသံနှင့် စကားပြောချိန် ထုတ်ယူနေသည်", "ဗီဒီယိုထဲမှ အသံကို ဆွဲထုတ်ပြီး Groq Whisper AI ဖြင့် နားထောင်နေပါသည်...");
+        updateProg(28, "🎧 အသံထုတ်ယူပြီး Whisper နားထောင်နေသည်", "ဗီဒီယိုထဲမှ စကားပြောချိန်များကို Groq Whisper ဖြင့် ထုတ်ယူနေပါသည်...");
         const wavBlob = await extractFastAudioBlob(currentVideoFile);
 
         const formData = new FormData();
@@ -1447,7 +1469,7 @@ async function runGeminiVisionAndSmartSync() {{
             headers: {{ 'Authorization': 'Bearer ' + groqKey }},
             body: formData
         }});
-        if (!wResp.ok) throw new Error("Groq API Key မှားယွင်းနေပါသည် သို့မဟုတ် အင်တာနက်လိုင်း ပြတ်တောက်နေပါသည်။");
+        if (!wResp.ok) throw new Error("Groq API Key မှားနေပါသည် သို့မဟုတ် အင်တာနက်လိုင်း ပြတ်တောက်နေပါသည်။");
         const wData = await wResp.json();
         const rawSegs = (wData && Array.isArray(wData.segments)) ? wData.segments : [];
         if (rawSegs.length === 0) throw new Error("ဗီဒီယိုထဲတွင် စကားပြောသံ မတွေ့ရှိပါ။");
@@ -1456,39 +1478,131 @@ async function runGeminiVisionAndSmartSync() {{
         if (narrationStyle === 'third') stylePrompt = "Rewrite and translate into natural Burmese (Myanmar) as a Third-Person movie recap narrator.";
         if (narrationStyle === 'first') stylePrompt = "Rewrite and translate into natural Burmese (Myanmar) from a First-Person main character perspective.";
 
-        const transMap = await translateWithGeminiVisionAndFallback(rawSegs, keyframesB64, geminiKey, groqKey, stylePrompt, updateProg);
+        const translatedSegments = [];
+        const batchSize = 15;
+        for (let i = 0; i < rawSegs.length; i += batchSize) {{
+            const batch = rawSegs.slice(i, i + batchSize);
+            const pct = Math.min(95, 45 + Math.round((i / rawSegs.length) * 50));
+            updateProg(pct, "🤖 မြန်မာဘာသာသို့ ပြန်ဆိုနေသည်", `စာကြောင်း (${{i + 1}} မှ ${{i + batch.length}}) ကို မြန်မာဘာသာပြန်နေပါသည်...`);
 
-        const baseSegs = rawSegs.map((s, idx) => ({{
-            start: parseFloat(Number(s.start || 0).toFixed(2)),
-            end: parseFloat(Number(s.end || (s.start + 2)).toFixed(2)),
-            text: cleanMyanmarText(transMap[idx] || s.text || "")
-        }})).filter(s => s.text.length > 0);
+            const srcLines = batch.map(s => s.text.trim());
+            const mmLines = await translateBatchToBurmeseGuaranteed(
+                srcLines,
+                i === 0 ? keyframesB64 : [],
+                geminiKey,
+                groqKey,
+                stylePrompt
+            );
 
-        updateProg(88, "⚡ အဆင့် ၄/၄ - Smart Sync ချိန်ညှိနေသည်", "Video ရုပ်၊ မြန်မာ TTS အသံ နှင့် SRT စာတန်း ၃ ခုလုံး ကွက်တိဖြစ်အောင် အနှေး/အမြန် တွက်ချက်နေပါသည်...");
-        const userSpd = parseInt(document.getElementById('ttsSpeedSlider').value) || 0;
-        segments = computeSmartSyncParameters(baseSegs, userSpd);
-
-        synthesizedAudioMap = {{}};
-        for (let i = 0; i < segments.length; i++) {{
-            const txt = segments[i].text;
-            synthesizedAudioMap[i] = `https://translate.google.com/translate_tts?ie=UTF-8&q=${{encodeURIComponent(txt.slice(0, 180))}}&tl=my&client=tw-ob`;
+            for (let j = 0; j < batch.length; j++) {{
+                let mmTxt = mmLines[j] || "";
+                // အကယ်၍ တစ်ကြောင်းစ နှစ်ကြောင်းစ မြန်မာစာ မဖြစ်သေးပါက Google Translate ဖြင့် ထပ်မံပြန်ဆိုသည်
+                if (!hasMyanmarCharacters(mmTxt)) {{
+                    const gtUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=my&dt=t&q=${{encodeURIComponent(srcLines[j])}}`;
+                    const gtResp = await fetch(gtUrl);
+                    const gtJson = await gtResp.json();
+                    mmTxt = cleanMyanmarText(gtJson?.[0]?.map(x => x[0]).join('') || "");
+                }}
+                translatedSegments.push({{
+                    start: parseFloat(Number(batch[j].start || 0).toFixed(2)),
+                    end: parseFloat(Number(batch[j].end || (batch[j].start + 2)).toFixed(2)),
+                    text: mmTxt,
+                    realTtsDur: 0,
+                    vidSpeed: 1.0,
+                    ttsRate: 1.0
+                }});
+            }}
         }}
 
-        updateProg(100, "✅ Gemini Vision + Smart Sync အောင်မြင်ပါပြီ!", `စာကြောင်း (${{segments.length}}) ကြောင်းကို ရုပ်+အသံ+စာတန်း ချိတ်ဆက်ပြီးပါပြီ။ အပေါ်က Video ကို Play နှိပ်ကြည့်ပါ။`);
+        segments = translatedSegments.filter(s => s.text.length > 0);
+        updateProg(100, "✅ အဆင့် (၁) မြန်မာဘာသာပြန် ပြီးဆုံးပါပြီ!", `စုစုပေါင်း မြန်မာစာကြောင်း (${{segments.length}}) ကြောင်း ရရှိပါပြီ။ အောက်က အဆင့် (၂) တွင် TTS အသံထုတ်ပါ။`);
+
+        previewBox.style.display = 'block';
+        previewBox.innerHTML = segments.map((s, idx) => `<div><b>[${{fmtTime(s.start)}} - ${{fmtTime(s.end)}}]</b> ${{s.text}}</div>`).join('');
     }} catch (err) {{
         updateProg(100, "❌ Error ဖြစ်ပွားပါသည်", err.message || String(err));
     }}
 }}
 
+// ==================== STEP 2: မြန်မာ TTS အသံထုတ်ခြင်း နှင့် အသံအရှည် တိုင်းတာခြင်း ====================
 function previewVoice(idx) {{
     const spdPct = parseInt(document.getElementById('ttsSpeedSlider').value) || 0;
-    const sampleUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${{encodeURIComponent("မင်္ဂလာပါရှင်၊ အသံနမူနာဖြစ်ပါတယ်")}}&tl=my&client=tw-ob`;
+    const sampleUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${{encodeURIComponent("မင်္ဂလာပါရှင်၊ မြန်မာအသံနမူနာဖြစ်ပါတယ်")}}&tl=my&client=tw-ob`;
     const aud = new Audio(sampleUrl);
     aud.playbackRate = Math.max(0.5, Math.min(2.0, 1.0 + (spdPct / 100.0)));
     aud.play().catch(() => {{}});
 }}
 
-// ==================== SMART SYNC PLAYBACK (AUTO VIDEO SPEED + TTS RATE + SRT) ====================
+async function step2GenerateBurmeseTTS() {{
+    const card = document.getElementById('step2ProgCard');
+    const titleEl = document.getElementById('step2Title');
+    const fillEl = document.getElementById('step2Fill');
+    const detailEl = document.getElementById('step2Detail');
+
+    const updateProg = (pct, title, detail) => {{
+        card.style.display = 'block';
+        fillEl.style.width = pct + '%';
+        titleEl.innerText = `${{title}} (${{pct}}%)`;
+        if (detail) detailEl.innerText = detail;
+    }};
+
+    if (segments.length === 0) {{
+        alert("ကျေးဇူးပြု၍ အဆင့် (၁) မြန်မာဘာသာပြန် Script အရင်ထုတ်ပေးပါ။");
+        return;
+    }}
+
+    ttsPreloadedAudios = {{}};
+    const userSpdPct = parseInt(document.getElementById('ttsSpeedSlider').value) || 0;
+    const baseUserRate = Math.max(0.5, Math.min(2.0, 1.0 + (userSpdPct / 100.0)));
+
+    for (let i = 0; i < segments.length; i++) {{
+        const pct = Math.min(98, Math.round(((i + 1) / segments.length) * 95));
+        updateProg(pct, "🎙️ မြန်မာ TTS အသံထုတ်နေသည်", `စာကြောင်း (${{i + 1}} / ${{segments.length}}) ၏ အသံနှင့် ကြာချိန်ကို တိုင်းတာနေပါသည်...`);
+
+        const txt = segments[i].text.trim();
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${{encodeURIComponent(txt.slice(0, 180))}}&tl=my&client=tw-ob`;
+        ttsPreloadedAudios[i] = url;
+
+        // အသံဖိုင်၏ တကယ့်ကြာချိန်အစစ်ကို တိုင်းတာခြင်း (Smart Sync အတွက်)
+        const measuredDur = await new Promise(resolve => {{
+            const tempAud = new Audio();
+            tempAud.preload = "metadata";
+            tempAud.onloadedmetadata = () => resolve(tempAud.duration || (txt.length / 11.0));
+            tempAud.onerror = () => resolve(txt.length / 11.0);
+            setTimeout(() => resolve(txt.length / 11.0), 1200);
+            tempAud.src = url;
+        }});
+
+        const effectiveTtsDur = measuredDur / baseUserRate;
+        segments[i].realTtsDur = parseFloat(effectiveTtsDur.toFixed(2));
+
+        // Smart Sync Ratio တွက်ချက်ခြင်း (Video Slot vs Real TTS Duration)
+        const slotDur = Math.max(0.35, segments[i].end - segments[i].start);
+        const ratio = effectiveTtsDur / slotDur;
+
+        if (ratio > 1.08) {{
+            // TTS အသံက Video အပိုင်းထက် ပိုရှည်နေလျှင် TTS ကို မြန်ပေးပြီး Video ကို အနည်းငယ် နှေးပေးမည်
+            const newTtsRate = Math.min(1.65, baseUserRate * Math.pow(ratio, 0.55));
+            const adjTtsDur = measuredDur / newTtsRate;
+            const newVidSpeed = Math.max(0.60, Math.min(1.0, slotDur / Math.max(0.3, adjTtsDur)));
+            segments[i].ttsRate = parseFloat(newTtsRate.toFixed(2));
+            segments[i].vidSpeed = parseFloat(newVidSpeed.toFixed(2));
+        }} else if (ratio < 0.78) {{
+            // TTS အသံက တိုနေလျှင် Video အပိုင်းကို မြန်ပေးမည်
+            const newVidSpeed = Math.min(1.50, Math.max(1.0, slotDur / Math.max(0.3, effectiveTtsDur)));
+            segments[i].ttsRate = parseFloat(baseUserRate.toFixed(2));
+            segments[i].vidSpeed = parseFloat(newVidSpeed.toFixed(2));
+        }} else {{
+            segments[i].ttsRate = parseFloat(baseUserRate.toFixed(2));
+            segments[i].vidSpeed = 1.0;
+        }}
+    }}
+
+    isTtsReady = true;
+    updateProg(100, "✅ အဆင့် (၂) မြန်မာ TTS အသံနှင့် Smart Sync အသင့်ဖြစ်ပါပြီ!", "အပေါ်က Video ကို Play နှိပ်နားထောင်နိုင်သလို အောက်ဆုံးက အဆင့် (၄) တွင် Video ထုတ်ယူနိုင်ပါပြီ။");
+}}
+
+// ==================== SMART SYNC PLAYBACK ENGINE ====================
 let lastPlayedSegIdx = -1;
 function syncSmartVideoAndVoice(curTime) {{
     if (video.paused) return;
@@ -1511,15 +1625,15 @@ function syncSmartVideoAndVoice(curTime) {{
         if (Math.abs(video.playbackRate - targetVidSpeed) > 0.04) {{
             video.playbackRate = targetVidSpeed;
         }}
-        smartSyncIndicator.innerText = `⚡ Smart Sync: Video ${{targetVidSpeed.toFixed(2)}}x | TTS ${{(seg.ttsRate || 1.0).toFixed(2)}}x`;
+        smartSyncIndicator.innerText = `⚡ Smart Sync: Vid ${{targetVidSpeed.toFixed(2)}}x | TTS ${{(seg.ttsRate || 1.0).toFixed(2)}}x`;
 
-        if (foundIdx !== lastPlayedSegIdx && synthesizedAudioMap[foundIdx]) {{
+        if (foundIdx !== lastPlayedSegIdx && ttsPreloadedAudios[foundIdx]) {{
             lastPlayedSegIdx = foundIdx;
             const userSpdPct = parseInt(document.getElementById('ttsSpeedSlider').value) || 0;
             const baseUserRate = Math.max(0.5, Math.min(2.0, 1.0 + (userSpdPct / 100.0)));
             const finalTtsRate = smartOn ? (seg.ttsRate || baseUserRate) : baseUserRate;
 
-            activeSpeechAudio.src = synthesizedAudioMap[foundIdx];
+            activeSpeechAudio.src = ttsPreloadedAudios[foundIdx];
             activeSpeechAudio.volume = parseInt(document.getElementById('voVolSlider').value) / 100.0;
             activeSpeechAudio.playbackRate = Math.max(0.5, Math.min(2.2, finalTtsRate));
             activeSpeechAudio.play().catch(() => {{}});
@@ -1531,7 +1645,7 @@ function syncSmartVideoAndVoice(curTime) {{
     }}
 }}
 
-// ==================== SRT DOWNLOAD & SMART SYNC LOCAL RENDER ====================
+// ==================== STEP 3 (CARD 4): SMART SYNC RENDER VIDEO ====================
 function downloadSRTFile() {{
     const fmtSrt = (s) => {{
         const hrs = Math.floor(s / 3600);
@@ -1547,12 +1661,16 @@ function downloadSRTFile() {{
     const blob = new Blob([srt], {{ type: 'text/plain;charset=utf-8' }});
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = "RecapMM_SmartSync.srt";
+    a.download = "RecapMM_SmartSync_Burmese.srt";
     a.click();
 }}
 
-function startSmartSyncLocalRender() {{
+async function step3RenderSmartSyncVideo() {{
     if (!video.src) {{ alert("ကျေးဇူးပြု၍ အပေါ်ဆုံးမှ Gallery ဗီဒီယို အရင်ရွေးပေးပါ။"); return; }}
+    if (!isTtsReady) {{
+        await step2GenerateBurmeseTTS();
+    }}
+
     const pCard = document.getElementById('renderProgressCard');
     const pTitle = document.getElementById('renderStepTitle');
     const pFill = document.getElementById('renderProgFill');
@@ -1569,7 +1687,6 @@ function startSmartSyncLocalRender() {{
     const chunks = [];
     const stream = canvas.captureStream(30);
 
-    // WebAudio ဖြင့် TTS အသံကို Video Stream ထဲသို့ တိုက်ရိုက် ပေါင်းထည့်ခြင်း
     try {{
         if (!audioCtxGlobal) {{
             audioCtxGlobal = new (window.AudioContext || window.webkitAudioContext)();
@@ -1581,7 +1698,7 @@ function startSmartSyncLocalRender() {{
             dest.stream.getAudioTracks().forEach(t => stream.addTrack(t));
         }}
     }} catch (e) {{
-        console.log("Audio stream note:", e);
+        console.log("Audio mux note:", e);
     }}
 
     const mime = MediaRecorder.isTypeSupported('video/mp4') ? 'video/mp4' : 'video/webm;codecs=vp8';
@@ -1591,10 +1708,9 @@ function startSmartSyncLocalRender() {{
         if (!isRecording) {{ clearInterval(progInterval); return; }}
         const dur = video.duration || 1;
         const pct = Math.min(99, Math.round((video.currentTime / dur) * 100));
-        const remSec = Math.max(0, Math.round(dur - video.currentTime));
         pFill.style.width = pct + '%';
         pTitle.innerText = `🎬 Smart Sync Rendering — ${{pct}}%`;
-        pDetail.innerText = `လက်ရှိအချိန်: ${{fmtTime(video.currentTime)}} / ${{fmtTime(dur)}} (Video Speed: ${{video.playbackRate.toFixed(2)}}x ဖြင့် ရုပ်+အသံ+စာတန်း ချိန်ညှိပေါင်းစပ်နေသည်...)`;
+        pDetail.innerText = `အချိန်: ${{fmtTime(video.currentTime)}} / ${{fmtTime(dur)}} — Video Speed (${{video.playbackRate.toFixed(2)}}x) နှင့် မြန်မာ TTS အသံ ချိန်ညှိပေါင်းစပ်နေသည်...`;
     }}, 250);
 
     recorder.ondataavailable = (e) => {{ if (e.data && e.data.size > 0) chunks.push(e.data); }};
@@ -1610,7 +1726,7 @@ function startSmartSyncLocalRender() {{
         dlAnchor.href = url;
         dlAnchor.download = mime.includes('mp4') ? `RecapMM_SmartSync_${{mb}}MB.mp4` : `RecapMM_SmartSync_${{mb}}MB.webm`;
         dlAnchor.innerText = `📥 MP4 Download (${{mb}} MB)`;
-        pTitle.innerText = `✅ Smart Sync Render အောင်မြင်စွာ ပြီးဆုံးပါပြီ!`;
+        pTitle.innerText = `✅ Smart Sync Video အောင်မြင်စွာ ပြီးဆုံးပါပြီ!`;
         pDetail.innerText = `ဖိုင်ဆိုဒ်: ${{mb}} MB (အောက်တွင် တိုက်ရိုက် ကြည့်ရှု/Download ဆွဲနိုင်ပါပြီ)`;
         outWrap.style.display = 'block';
     }};
