@@ -465,9 +465,83 @@ def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_d
             merged.append({"start": start, "end": end, "text": text})
     return merged
 
+def discover_available_gemini_models(gemini_client, preferred_model: str) -> list:
+    """
+    Google API တွင် လက်ရှိ အမှန်တကယ် သုံး၍ရသော Gemini Model စာရင်းကို အလိုအလျောက် ရှာဖွေပေးခြင်း
+    """
+    candidates = [
+        preferred_model.strip(),
+        "gemini-3.8-flash",
+        "gemini-3.5-flash",
+        "gemini-3.1-flash-lite-preview",
+        "gemini-3.0-flash"
+    ]
+    try:
+        for m in gemini_client.models.list():
+            name = getattr(m, "name", "") or ""
+            if name.startswith("models/"):
+                name = name.replace("models/", "", 1)
+            lower_n = name.lower()
+            if "gemini" in lower_n and ("flash" in lower_n or "pro" in lower_n):
+                if not any(x in lower_n for x in ["tts", "image", "vision", "embedding", "veo", "audio", "2.0", "1.5"]):
+                    candidates.append(name)
+    except Exception:
+        pass
+
+    chain = []
+    for c in candidates:
+        if c and c not in chain:
+            chain.append(c)
+    return chain
+
+def discover_available_groq_models(groq_client) -> list:
+    """
+    Groq API တွင် လက်ရှိ အမှန်တကယ် သုံး၍ရသော Chat Model စာရင်းကို အလိုအလျောက် ရှာဖွေပေးခြင်း
+    """
+    candidates = []
+    try:
+        models_resp = groq_client.models.list()
+        for m in getattr(models_resp, "data", []):
+            mid = getattr(m, "id", "") or ""
+            low = mid.lower()
+            if any(x in low for x in ["whisper", "tts", "guard", "orpheus", "playai", "embed", "vision"]):
+                continue
+            candidates.append(mid)
+    except Exception:
+        pass
+
+    # အရည်အသွေးမြင့် Model များကို ဦးစားပေးစီမည်
+    preferred_order = sorted(
+        candidates,
+        key=lambda x: (0 if "70b" in x.lower() or "llama-4" in x.lower() or "qwen" in x.lower() or "deepseek" in x.lower() else 1)
+    )
+    fallback_defaults = ["llama-3.3-70b-specdec", "llama-3.1-8b-instant", "gemma2-9b-it"]
+    chain = []
+    for c in preferred_order + fallback_defaults:
+        if c and c not in chain:
+            chain.append(c)
+    return chain[:5]
+
+def extract_json_from_text(raw_txt: str):
+    """JSON String အတွင်းမှ List သို့မဟုတ် Dict ကို စိတ်ချရစွာ ဆွဲထုတ်ခြင်း"""
+    raw_txt = raw_txt.strip()
+    raw_txt = re.sub(r"^```(?:json)?\s*", "", raw_txt)
+    raw_txt = re.sub(r"\s*```$", "", raw_txt)
+    parsed = json.loads(raw_txt)
+    if isinstance(parsed, dict):
+        for k in ("translations", "items", "data", "result", "lines"):
+            if k in parsed and isinstance(parsed[k], list):
+                return parsed[k]
+        for v in parsed.values():
+            if isinstance(v, list):
+                return v
+    if isinstance(parsed, list):
+        return parsed
+    raise ValueError(f"JSON List ပုံစံ မဟုတ်ပါ: {type(parsed)}")
+
 def translate_segments_recap_style(gemini_client, groq_client, preferred_model: str, segments: list, style_mode: str, log_fn=None):
     """
-    Timeout နှင့် Error ဖော်ပြချက်များ ပါဝင်သော ဘာသာပြန်စနစ် (လုံးဝ Hang မဖြစ်စေရန်)
+    Auto Model Discovery + Timeout ပါဝင်သော ဘာသာပြန်စနစ်
     """
     if style_mode == "third_person":
         style_instr = (
@@ -485,12 +559,9 @@ def translate_segments_recap_style(gemini_client, groq_client, preferred_model: 
             "(မူရင်း POV နှင့် အဓိပ္ပာယ် မပြောင်းဘဲ တိုက်ရိုက်ဘာသာပြန်ရန်). Keep each line concise."
         )
 
-    # အမှန်တကယ် အလုပ်လုပ်သော တရားဝင် Gemini Model များ
-    fallback_models = [preferred_model.strip(), "gemini-2.5-flash", "gemini-2.0-flash"]
-    model_chain = []
-    for m in fallback_models:
-        if m and m not in model_chain:
-            model_chain.append(m)
+    gemini_chain = discover_available_gemini_models(gemini_client, preferred_model)
+    groq_chain = None
+    dead_gemini_models = set()
 
     batch_size = 20
     total_batches = max(1, (len(segments) + batch_size - 1) // batch_size)
@@ -504,9 +575,11 @@ def translate_segments_recap_style(gemini_client, groq_client, preferred_model: 
         )
 
         translated_ok = False
-        last_err_msg = ""
+        last_gemini_err = ""
 
-        for model_name in model_chain:
+        for model_name in gemini_chain:
+            if model_name in dead_gemini_models:
+                continue
             if log_fn:
                 log_fn(f"🌐 ဘာသာပြန်နေသည် (အပိုင်း {b_idx}/{total_batches}) - Model: `{model_name}`...")
             try:
@@ -515,82 +588,94 @@ def translate_segments_recap_style(gemini_client, groq_client, preferred_model: 
                     contents=prompt,
                     config=types.GenerateContentConfig(
                         response_mime_type="application/json",
-                        http_options=types.HttpOptions(timeout=25000) # 25 စက္ကန့်ကျော်လျှင် တန်းကျော်မည်
+                        http_options=types.HttpOptions(timeout=25000)
                     )
                 )
                 raw_txt = (resp.text or "").strip()
                 if not raw_txt:
-                    raise ValueError("Gemini မှ စာသား ပြန်မလာပါ (Empty response)")
+                    raise ValueError("Empty response from Gemini")
 
-                parsed = json.loads(raw_txt)
-                if isinstance(parsed, dict):
-                    parsed = parsed.get("translations") or parsed.get("items") or list(parsed.values())[0]
-                if not isinstance(parsed, list):
-                    raise ValueError(f"JSON List ပုံစံ မဟုတ်ပါ: {type(parsed)}")
-
-                t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if isinstance(item, dict) and "id" in item}
+                parsed_list = extract_json_from_text(raw_txt)
+                t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed_list if isinstance(item, dict) and "id" in item}
                 for idx, s in enumerate(batch):
                     s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
                 translated_ok = True
                 break
             except Exception as e:
-                last_err_msg = f"{model_name} Error: {str(e)[:180]}"
+                err_str = str(e)
+                last_gemini_err = f"{model_name}: {err_str[:160]}"
+                if "404" in err_str or "NOT_FOUND" in err_str or "no longer available" in err_str:
+                    dead_gemini_models.add(model_name)
                 if log_fn:
-                    log_fn(f"⚠️ {last_err_msg} (အခြား Model သို့ ပြောင်းနေသည်...)")
-                time.sleep(0.8)
+                    log_fn(f"⚠️ `{model_name}` မရပါ ({err_str[:90]}...) အခြား Model သို့ ပြောင်းနေသည်...")
+                time.sleep(0.5)
 
         if not translated_ok:
-            if log_fn:
-                log_fn(f"🔄 Gemini မရသဖြင့် Groq (`llama-3.3-70b-versatile`) ဖြင့် အပိုင်း {b_idx}/{total_batches} ကို ဘာသာပြန်နေသည်...")
-            try:
-                groq_resp = groq_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[
-                        {"role": "system", "content": f"{style_instr} Output valid JSON only."},
-                        {"role": "user", "content": f"Return JSON object with key 'items' containing list of 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"}
-                    ],
-                    response_format={"type": "json_object"},
-                    timeout=30.0
-                )
-                g_data = json.loads(groq_resp.choices[0].message.content)
-                g_list = g_data.get("items", g_data) if isinstance(g_data, dict) else g_data
-                t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in g_list if isinstance(item, dict) and "id" in item}
-                for idx, s in enumerate(batch):
-                    s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
-            except Exception as ge:
+            if groq_chain is None:
+                groq_chain = discover_available_groq_models(groq_client)
+
+            last_groq_err = ""
+            for g_model in groq_chain:
+                if log_fn:
+                    log_fn(f"🔄 Groq Fallback Model (`{g_model}`) ဖြင့် အပိုင်း {b_idx}/{total_batches} ကို ဘာသာပြန်နေသည်...")
+                try:
+                    groq_resp = groq_client.chat.completions.create(
+                        model=g_model,
+                        messages=[
+                            {"role": "system", "content": f"{style_instr} Output valid JSON only."},
+                            {"role": "user", "content": f"Return JSON object with key 'items' containing list of 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"}
+                        ],
+                        response_format={"type": "json_object"},
+                        timeout=30.0
+                    )
+                    g_list = extract_json_from_text(groq_resp.choices[0].message.content)
+                    t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in g_list if isinstance(item, dict) and "id" in item}
+                    for idx, s in enumerate(batch):
+                        s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
+                    translated_ok = True
+                    break
+                except Exception as ge:
+                    last_groq_err = f"{g_model}: {str(ge)[:160]}"
+                    continue
+
+            if not translated_ok:
                 raise RuntimeError(
                     f"Gemini နှင့် Groq နှစ်ခုလုံးဖြင့် ဘာသာပြန်၍ မရပါ။\n"
-                    f"• Gemini Error: {last_err_msg}\n"
-                    f"• Groq Error: {ge}"
+                    f"• Gemini Error: {last_gemini_err}\n"
+                    f"• Groq Error: {last_groq_err}"
                 )
 
 def extract_and_translate_pipeline(video_path: str, groq_key: str, gemini_key: str, gemini_model: str, style_mode: str, log_fn=None) -> list:
-    """
-    အဆင့် (၁/၄) တွင် ဘာလုပ်နေသည်၊ ဘာ Error တက်သည်ကို တိကျစွာ သိရှိနိုင်သော Pipeline
-    """
     if log_fn:
         log_fn("🎵 အဆင့် ၁(က) - Video ထဲမှ အသံဖိုင် (MP3) ထုတ်ယူနေပါသည်...")
     extracted_audio = extract_compressed_audio(video_path)
     audio_mb = os.path.getsize(extracted_audio) / (1024 * 1024)
 
     if log_fn:
-        log_fn(f"🎙️ အဆင့် ၁(ခ) - Groq Whisper (`whisper-large-v3-turbo`) ဖြင့် အသံဖမ်းယူနေပါသည် ({audio_mb:.2f} MB)...")
+        log_fn(f"🎙️ အဆင့် ၁(ခ) - Groq Whisper ဖြင့် အသံဖမ်းယူနေပါသည် ({audio_mb:.2f} MB)...")
 
-    try:
-        groq_client = Groq(api_key=groq_key.strip(), timeout=60.0)
-        with open(extracted_audio, "rb") as f:
-            trans = groq_client.audio.transcriptions.create(
-                file=(extracted_audio, f.read()),
-                model="whisper-large-v3-turbo",
-                response_format="verbose_json"
-            )
-    except Exception as e:
-        if os.path.exists(extracted_audio):
-            os.remove(extracted_audio)
-        raise RuntimeError(f"Groq Whisper API Error (API Key သို့မဟုတ် အင်တာနက် စစ်ဆေးပါ): {e}")
+    groq_client = Groq(api_key=groq_key.strip(), timeout=60.0)
+    whisper_models = ["whisper-large-v3-turbo", "whisper-large-v3"]
+    trans = None
+    last_w_err = ""
+
+    for w_model in whisper_models:
+        try:
+            with open(extracted_audio, "rb") as f:
+                trans = groq_client.audio.transcriptions.create(
+                    file=(extracted_audio, f.read()),
+                    model=w_model,
+                    response_format="verbose_json"
+                )
+            break
+        except Exception as e:
+            last_w_err = str(e)
 
     if os.path.exists(extracted_audio):
         os.remove(extracted_audio)
+
+    if trans is None:
+        raise RuntimeError(f"Groq Whisper API Error: {last_w_err}")
 
     raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
     segs = merge_close_whisper_segments(raw_segs)
@@ -883,7 +968,7 @@ with st.sidebar:
     default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
     groq_key = st.text_input("Groq API Key", value=default_groq, type="password")
     gemini_key = st.text_input("Gemini API Key", value=default_gemini, type="password")
-    gemini_model = st.selectbox("Gemini Model", ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"])
+    gemini_model = st.selectbox("Gemini Model", ["gemini-3.8-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite-preview"])
     res_choice = st.selectbox("Video Resolution", ["720p HD (ဖိုင်ဆိုဒ်သေး & အကြည်လင်ဆုံး)", "Original Resolution", "1080p Full HD"])
     uploaded_font = st.file_uploader("Custom Font (.ttf) တင်ရန်", type=["ttf", "otf"])
     custom_font_path = register_uploaded_font(uploaded_font)
