@@ -5,6 +5,7 @@ import time
 import asyncio
 import subprocess
 import tempfile
+import traceback
 from io import BytesIO
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
@@ -22,10 +23,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed"
 )
 
-# ==================== SOFT LIGHT PASTEL THEME CSS (စာသားများ ရှင်းလင်းစွာမြင်ရစေရန်) ====================
+# ==================== SOFT LIGHT PASTEL THEME CSS ====================
 st.markdown("""
 <style>
-    /* ပင်မ နောက်ခံအရောင်ဖျော့ဖျော့နှင့် စာလုံးအနက်ရောင် */
     .stApp {
         background-color: #F1F5F9 !important;
         color: #0F172A !important;
@@ -35,7 +35,6 @@ st.markdown("""
         padding-bottom: 3rem;
         max-width: 520px;
     }
-    /* စာသားအားလုံး အနက်ရောင်/မီးခိုးရင့်ရောင် ရှင်းလင်းစွာ ပေါ်စေရန် */
     p, span, label, div[data-testid="stMarkdownContainer"] p {
         color: #1E293B !important;
     }
@@ -91,7 +90,6 @@ st.markdown("""
         font-weight: 700;
         color: #0F172A !important;
     }
-    /* ကတ်ပြားများအားလုံး အဖြူရောင် သန့်သန့်လေးဖြစ်စေရန် */
     div[data-testid="stVerticalBlockBorderWrapper"] {
         background-color: #FFFFFF !important;
         border: 1px solid #CBD5E1 !important;
@@ -100,7 +98,6 @@ st.markdown("""
         margin-bottom: 0.95rem !important;
         box-shadow: 0 4px 12px rgba(15, 23, 42, 0.04) !important;
     }
-    /* Input Box နှင့် Text Area များ အရောင်ဖျော့ပြီး စာလုံးထင်ရှားစေရန် */
     input, textarea, div[data-baseweb="select"] > div {
         background-color: #F8FAFC !important;
         color: #0F172A !important;
@@ -183,7 +180,6 @@ def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
     return (255, 255, 255, alpha)
 
 def clean_text_for_myanmar_font(text: str) -> str:
-    """လေးထောင့်ကွက် (Tofu □) လုံးဝမပေါ်စေရန် စာလုံးပိုများ သန့်စင်ခြင်း"""
     if not text:
         return ""
     text = re.sub(r"[\u200b\u200c\u200d\u200e\u200f\ufeff\u202a-\u202e\u2060-\u206f]", "", text)
@@ -289,7 +285,12 @@ def format_srt_time(seconds: float) -> str:
 
 def extract_compressed_audio(video_path: str) -> str:
     temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
-    subprocess.run(["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", temp_audio], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    res = subprocess.run(
+        ["ffmpeg", "-y", "-i", video_path, "-vn", "-ac", "1", "-ar", "16000", "-b:a", "48k", temp_audio],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    if res.returncode != 0 or not os.path.exists(temp_audio) or os.path.getsize(temp_audio) < 100:
+        raise RuntimeError(f"Video ထဲမှ အသံထုတ်ယူမရပါ (Video တွင် အသံပါ/မပါ စစ်ဆေးပါ):\n{res.stderr}")
     return temp_audio
 
 @st.cache_data(show_spinner=False)
@@ -394,10 +395,6 @@ def build_touch_canvas_background(
     sub_color_hex: str,
     mirror_vid: bool
 ) -> Image.Image:
-    """
-    Video ပေါ်တွင် Blur နှင့် မြန်မာစာတန်းထိုးကို လက်ဖြင့် တိုက်ရိုက် ဆွဲရွှေ့ချိန်ညှိနိုင်ရန်
-    နောက်ခံပုံကို တည်ဆောက်ပေးခြင်း
-    """
     img = Image.open(BytesIO(frame_bytes)).convert("RGBA")
     if mirror_vid:
         img = img.transpose(Image.FLIP_LEFT_RIGHT)
@@ -409,7 +406,6 @@ def build_touch_canvas_background(
     bx_w = min(max(12, bx_w), disp_w - bx_x)
     bx_h = min(max(12, bx_h), disp_h - bx_y)
 
-    # Blur ဖုံးထားသော နေရာကို ပုံပေါ်တွင် တိုက်ရိုက် ပြသခြင်း
     if enable_blur and blur_opacity_pct > 0:
         crop = img.crop((bx_x, bx_y, bx_x + bx_w, bx_y + bx_h))
         blurred = crop.filter(ImageFilter.GaussianBlur(radius=max(3, int(12 * (blur_opacity_pct / 100.0)))))
@@ -421,7 +417,6 @@ def build_touch_canvas_background(
             draw = ImageDraw.Draw(img)
             draw.rounded_rectangle([bx_x, bx_y, bx_x + bx_w, bx_y + bx_h], radius=6, outline=(234, 88, 12, 200), width=2)
 
-    # မြန်မာစာတန်းထိုးကို ပုံပေါ်တွင် တိုက်ရိုက် ပြသခြင်း
     if show_sub:
         sub_rgba = render_myanmar_subtitle_rgba(sample_text, font_path, sub_size_pct, disp_w, sub_color_hex, pill_bg=False)
         sc_x, sc_y = sub_center_disp
@@ -470,7 +465,10 @@ def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_d
             merged.append({"start": start, "end": end, "text": text})
     return merged
 
-def translate_segments_recap_style(gemini_client, groq_client, preferred_model: str, segments: list, style_mode: str):
+def translate_segments_recap_style(gemini_client, groq_client, preferred_model: str, segments: list, style_mode: str, log_fn=None):
+    """
+    Timeout နှင့် Error ဖော်ပြချက်များ ပါဝင်သော ဘာသာပြန်စနစ် (လုံးဝ Hang မဖြစ်စေရန်)
+    """
     if style_mode == "third_person":
         style_instr = (
             "Rewrite and translate into natural Burmese (Myanmar) as a THIRD-PERSON movie recap narrator "
@@ -487,14 +485,17 @@ def translate_segments_recap_style(gemini_client, groq_client, preferred_model: 
             "(မူရင်း POV နှင့် အဓိပ္ပာယ် မပြောင်းဘဲ တိုက်ရိုက်ဘာသာပြန်ရန်). Keep each line concise."
         )
 
-    fallback_models = [preferred_model.strip(), "gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"]
+    # အမှန်တကယ် အလုပ်လုပ်သော တရားဝင် Gemini Model များ
+    fallback_models = [preferred_model.strip(), "gemini-2.5-flash", "gemini-2.0-flash"]
     model_chain = []
     for m in fallback_models:
-        if m not in model_chain:
+        if m and m not in model_chain:
             model_chain.append(m)
 
-    batch_size = 25
-    for i in range(0, len(segments), batch_size):
+    batch_size = 20
+    total_batches = max(1, (len(segments) + batch_size - 1) // batch_size)
+
+    for b_idx, i in enumerate(range(0, len(segments), batch_size), start=1):
         batch = segments[i:i + batch_size]
         payload = [{"id": idx, "text": s["text"]} for idx, s in enumerate(batch)]
         prompt = (
@@ -503,56 +504,134 @@ def translate_segments_recap_style(gemini_client, groq_client, preferred_model: 
         )
 
         translated_ok = False
+        last_err_msg = ""
+
         for model_name in model_chain:
-            for _ in range(2):
-                try:
-                    resp = gemini_client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(response_mime_type="application/json")
+            if log_fn:
+                log_fn(f"🌐 ဘာသာပြန်နေသည် (အပိုင်း {b_idx}/{total_batches}) - Model: `{model_name}`...")
+            try:
+                resp = gemini_client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        response_mime_type="application/json",
+                        http_options=types.HttpOptions(timeout=25000) # 25 စက္ကန့်ကျော်လျှင် တန်းကျော်မည်
                     )
-                    parsed = json.loads(resp.text.strip())
-                    if isinstance(parsed, dict) and "translations" in parsed:
-                        parsed = parsed["translations"]
-                    t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if "id" in item}
-                    for idx, s in enumerate(batch):
-                        s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
-                    translated_ok = True
-                    break
-                except Exception as e:
-                    if "503" in str(e) or "429" in str(e):
-                        time.sleep(1.5)
-                        continue
-                    break
-            if translated_ok:
+                )
+                raw_txt = (resp.text or "").strip()
+                if not raw_txt:
+                    raise ValueError("Gemini မှ စာသား ပြန်မလာပါ (Empty response)")
+
+                parsed = json.loads(raw_txt)
+                if isinstance(parsed, dict):
+                    parsed = parsed.get("translations") or parsed.get("items") or list(parsed.values())[0]
+                if not isinstance(parsed, list):
+                    raise ValueError(f"JSON List ပုံစံ မဟုတ်ပါ: {type(parsed)}")
+
+                t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in parsed if isinstance(item, dict) and "id" in item}
+                for idx, s in enumerate(batch):
+                    s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
+                translated_ok = True
                 break
+            except Exception as e:
+                last_err_msg = f"{model_name} Error: {str(e)[:180]}"
+                if log_fn:
+                    log_fn(f"⚠️ {last_err_msg} (အခြား Model သို့ ပြောင်းနေသည်...)")
+                time.sleep(0.8)
 
         if not translated_ok:
-            groq_resp = groq_client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": f"{style_instr} Output valid JSON only."},
-                    {"role": "user", "content": f"Return JSON object with key 'items' containing list of 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"}
-                ],
-                response_format={"type": "json_object"}
+            if log_fn:
+                log_fn(f"🔄 Gemini မရသဖြင့် Groq (`llama-3.3-70b-versatile`) ဖြင့် အပိုင်း {b_idx}/{total_batches} ကို ဘာသာပြန်နေသည်...")
+            try:
+                groq_resp = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[
+                        {"role": "system", "content": f"{style_instr} Output valid JSON only."},
+                        {"role": "user", "content": f"Return JSON object with key 'items' containing list of 'id' and 'translation':\n{json.dumps(payload, ensure_ascii=False)}"}
+                    ],
+                    response_format={"type": "json_object"},
+                    timeout=30.0
+                )
+                g_data = json.loads(groq_resp.choices[0].message.content)
+                g_list = g_data.get("items", g_data) if isinstance(g_data, dict) else g_data
+                t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in g_list if isinstance(item, dict) and "id" in item}
+                for idx, s in enumerate(batch):
+                    s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
+            except Exception as ge:
+                raise RuntimeError(
+                    f"Gemini နှင့် Groq နှစ်ခုလုံးဖြင့် ဘာသာပြန်၍ မရပါ။\n"
+                    f"• Gemini Error: {last_err_msg}\n"
+                    f"• Groq Error: {ge}"
+                )
+
+def extract_and_translate_pipeline(video_path: str, groq_key: str, gemini_key: str, gemini_model: str, style_mode: str, log_fn=None) -> list:
+    """
+    အဆင့် (၁/၄) တွင် ဘာလုပ်နေသည်၊ ဘာ Error တက်သည်ကို တိကျစွာ သိရှိနိုင်သော Pipeline
+    """
+    if log_fn:
+        log_fn("🎵 အဆင့် ၁(က) - Video ထဲမှ အသံဖိုင် (MP3) ထုတ်ယူနေပါသည်...")
+    extracted_audio = extract_compressed_audio(video_path)
+    audio_mb = os.path.getsize(extracted_audio) / (1024 * 1024)
+
+    if log_fn:
+        log_fn(f"🎙️ အဆင့် ၁(ခ) - Groq Whisper (`whisper-large-v3-turbo`) ဖြင့် အသံဖမ်းယူနေပါသည် ({audio_mb:.2f} MB)...")
+
+    try:
+        groq_client = Groq(api_key=groq_key.strip(), timeout=60.0)
+        with open(extracted_audio, "rb") as f:
+            trans = groq_client.audio.transcriptions.create(
+                file=(extracted_audio, f.read()),
+                model="whisper-large-v3-turbo",
+                response_format="verbose_json"
             )
-            g_data = json.loads(groq_resp.choices[0].message.content)
-            g_list = g_data.get("items", g_data) if isinstance(g_data, dict) else g_data
-            t_map = {int(item["id"]): str(item.get("translation", "")).strip() for item in g_list if isinstance(item, dict) and "id" in item}
-            for idx, s in enumerate(batch):
-                s["translated"] = clean_text_for_myanmar_font(t_map.get(idx, s["text"]))
+    except Exception as e:
+        if os.path.exists(extracted_audio):
+            os.remove(extracted_audio)
+        raise RuntimeError(f"Groq Whisper API Error (API Key သို့မဟုတ် အင်တာနက် စစ်ဆေးပါ): {e}")
+
+    if os.path.exists(extracted_audio):
+        os.remove(extracted_audio)
+
+    raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
+    segs = merge_close_whisper_segments(raw_segs)
+
+    if not segs:
+        raise RuntimeError("Video ထဲတွင် စကားပြောသံ ရှာမတွေ့ပါ (Whisper မှ စာသားထွက်မလာပါ)။")
+
+    if log_fn:
+        log_fn(f"📝 စကားပြော စာကြောင်း ({len(segs)}) ကြောင်း ရရှိပါပြီ။ မြန်မာဘာသာသို့ စတင်ပြန်ဆိုနေပါသည်...")
+
+    gemini_client = genai.Client(api_key=gemini_key.strip())
+    translate_segments_recap_style(gemini_client, groq_client, gemini_model, segs, style_mode, log_fn=log_fn)
+    return segs
 
 async def synthesize_all_tts(segments, voice_id, rate_str, pitch_str):
-    sem = asyncio.Semaphore(6)
+    sem = asyncio.Semaphore(5)
     async def _one(idx, text):
         async with sem:
             raw_mp3 = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3").name
             trimmed_wav = tempfile.NamedTemporaryFile(delete=False, suffix=".wav").name
-            comm = edge_tts.Communicate(text=text or " ", voice=voice_id, rate=rate_str, pitch=pitch_str)
-            with open(raw_mp3, "wb") as f:
-                async for chunk in comm.stream():
-                    if chunk["type"] == "audio":
-                        f.write(chunk["data"])
+            clean_t = (text or "").strip() or "အင်း"
+
+            tts_ok = False
+            last_err = None
+            for attempt in range(3):
+                try:
+                    comm = edge_tts.Communicate(text=clean_t, voice=voice_id, rate=rate_str, pitch=pitch_str)
+                    with open(raw_mp3, "wb") as f:
+                        async for chunk in comm.stream():
+                            if chunk["type"] == "audio":
+                                f.write(chunk["data"])
+                    if os.path.exists(raw_mp3) and os.path.getsize(raw_mp3) > 100:
+                        tts_ok = True
+                        break
+                except Exception as e:
+                    last_err = e
+                    await asyncio.sleep(0.8)
+
+            if not tts_ok:
+                raise RuntimeError(f"Edge-TTS မြန်မာအသံထုတ်ရာတွင် Error တက်နေပါသည် (စာကြောင်း {idx+1}): {last_err}")
+
             subprocess.run([
                 "ffmpeg", "-y", "-i", raw_mp3,
                 "-af", "silenceremove=start_periods=1:start_silence=0.03:start_threshold=-45dB,areverse,silenceremove=start_periods=1:start_silence=0.05:start_threshold=-45dB,areverse",
@@ -596,7 +675,6 @@ def render_recapmm_final_video(
     raw_out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
-    # FPS ကို 24fps သို့ ကန့်သတ်ခြင်းဖြင့် ကြည်လင်မှုမပျက်ဘဲ Render ပိုမြန်စေသည်
     target_fps = min(24.0, vid_fps)
     vf_chain = [f"fps={target_fps:.2f}"]
     if mirror_vid:
@@ -616,7 +694,6 @@ def render_recapmm_final_video(
 
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
     if enable_blur and blur_opacity_pct > 0 and bx_w >= 8 and bx_h >= 8:
-        # gblur အစား အဆပေါင်းများစွာ ပိုမြန်သော boxblur ကို သုံးထားသည်
         luma_r = max(2, min(int(min(bx_w, bx_h) / 4), int(14 * (blur_opacity_pct / 100.0))))
         decode_vf = (
             f"{base_vf_str},split=2[vm][vc];"
@@ -655,7 +732,6 @@ def render_recapmm_final_video(
         time_segments.append({"out_start": out_cursor, "out_end": out_cursor + td, "in_start": item["v_start"], "in_end": item["v_end"]})
         out_cursor += td
 
-    # NumPy Fast Blending အတွက် Watermark နှင့် Subtitle များကို ကြိုတင်တွက်ချက်ထားခြင်း (Pre-computation)
     wm_np = None
     if wm_rgba is not None:
         wx = min(max(6, int((vid_w - wm_rgba.width) * (wm_x_pct / 100.0))), vid_w - wm_rgba.width - 6)
@@ -715,7 +791,6 @@ def render_recapmm_final_video(
             if sub_ptr < num_subs and sub_overlays[sub_ptr]["start"] <= t_out <= sub_overlays[sub_ptr]["end"]:
                 active_sub = sub_overlays[sub_ptr]
 
-        # Frame အသစ် သို့မဟုတ် စာတန်းအပြောင်းအလဲရှိမှသာ တွက်ချက်မည် (Duplicate Frames များကို တန်းကျော်မည်)
         if curr_in_frame_idx == last_in_idx and active_sub is last_active_sub and cached_out_bytes is not None:
             frame_to_write = cached_out_bytes
         else:
@@ -808,7 +883,7 @@ with st.sidebar:
     default_gemini = st.secrets.get("GEMINI_API_KEY", "") if "GEMINI_API_KEY" in st.secrets else ""
     groq_key = st.text_input("Groq API Key", value=default_groq, type="password")
     gemini_key = st.text_input("Gemini API Key", value=default_gemini, type="password")
-    gemini_model = st.selectbox("Gemini Model", ["gemini-3.5-flash", "gemini-3.8-flash", "gemini-3.1-flash-lite-preview", "gemini-2.5-flash"])
+    gemini_model = st.selectbox("Gemini Model", ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-pro"])
     res_choice = st.selectbox("Video Resolution", ["720p HD (ဖိုင်ဆိုဒ်သေး & အကြည်လင်ဆုံး)", "Original Resolution", "1080p Full HD"])
     uploaded_font = st.file_uploader("Custom Font (.ttf) တင်ရန်", type=["ttf", "otf"])
     custom_font_path = register_uploaded_font(uploaded_font)
@@ -848,7 +923,6 @@ if not default_groq or not default_gemini:
         gemini_key = st.text_input("Gemini API Key (AIzaSy...)", value=gemini_key, type="password", key="main_gemini")
 
 # ==================== CARD 3 SETTINGS (PRE-LOAD FOR LIVE TOUCH CANVAS) ====================
-# ဖောင့်နှင့် စာတန်းအရောင်ကို အောက်က Card 3 နှင့် ချိတ်ဆက်ရန်
 active_font_path = find_font_path(st.session_state.get("font_choice_state", FONT_CHOICES[0]), custom_font_path)
 sub_color_hex = COLOR_PRESETS.get(st.session_state.get("color_label_state", "🔵 အပြာနု"), "#38BDF8")
 sub_size_pct = st.session_state.get("sub_size_state", 90)
@@ -884,7 +958,6 @@ if video_temp_path:
         if frame_bytes:
             sample_sub_txt = st.session_state["script_segments"][0]["translated"] if st.session_state.get("script_segments") else "ပြန်စရာအိမ်မရှိတော့တဲ့"
 
-            # လက်ရှိ သိမ်းထားသော နေရာများကို ယူခြင်း
             cur_bx, cur_by, cur_bw, cur_bh = st.session_state["blur_box_disp"]
             cur_by = min(max(10, cur_by), disp_h - 30)
             cur_bh = min(max(18, cur_bh), disp_h - cur_by - 4)
@@ -968,24 +1041,23 @@ with st.container(border=True):
         elif not groq_key or not gemini_key:
             st.error("Groq နှင့် Gemini API Key နှစ်ခုလုံး ထည့်ပေးပါ။")
         else:
-            with st.spinner("Groq Whisper + Gemini 3.5 ဖြင့် မြန်မာ Script ထုတ်နေပါသည်..."):
-                try:
-                    extracted_audio = extract_compressed_audio(video_temp_path)
-                    groq_client = Groq(api_key=groq_key.strip())
-                    with open(extracted_audio, "rb") as f:
-                        trans = groq_client.audio.transcriptions.create(
-                            file=(extracted_audio, f.read()),
-                            model="whisper-large-v3-turbo",
-                            response_format="verbose_json"
-                        )
-                    raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
-                    segs = merge_close_whisper_segments(raw_segs)
-                    gemini_client = genai.Client(api_key=gemini_key.strip())
-                    translate_segments_recap_style(gemini_client, groq_client, gemini_model, segs, style_mode)
-                    st.session_state["script_segments"] = segs
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"Script ထုတ်ရာတွင် Error ဖြစ်ပွားပါသည်: {e}")
+            s_box = st.status("⏳ မြန်မာ Script စတင်ထုတ်ယူနေပါသည်...", expanded=True)
+            try:
+                segs = extract_and_translate_pipeline(
+                    video_path=video_temp_path,
+                    groq_key=groq_key,
+                    gemini_key=gemini_key,
+                    gemini_model=gemini_model,
+                    style_mode=style_mode,
+                    log_fn=s_box.write
+                )
+                st.session_state["script_segments"] = segs
+                s_box.update(label=f"✅ စာကြောင်း ({len(segs)}) ကြောင်း အောင်မြင်စွာ ထုတ်ပြီးပါပြီ!", state="complete", expanded=False)
+                st.rerun()
+            except Exception as e:
+                s_box.update(label="❌ Script ထုတ်ရာတွင် Error တက်သွားပါသည်", state="error", expanded=True)
+                st.error(f"**Error အသေးစိတ်:**\n{e}")
+                st.code(traceback.format_exc())
 
     segs_list = st.session_state.get("script_segments", [])
     if segs_list:
@@ -1105,24 +1177,20 @@ with st.container(border=True):
                 vid_w, vid_h = calculate_target_resolution(orig_w, orig_h, res_choice)
 
                 if not st.session_state.get("script_segments"):
-                    status.write("🎧 ၁/၄ - Groq Whisper + Gemini 3.5 ဖြင့် Script ထုတ်ယူနေပါသည်...")
-                    extracted_audio = extract_compressed_audio(video_temp_path)
-                    groq_client = Groq(api_key=groq_key.strip())
-                    with open(extracted_audio, "rb") as f:
-                        trans = groq_client.audio.transcriptions.create(
-                            file=(extracted_audio, f.read()),
-                            model="whisper-large-v3-turbo",
-                            response_format="verbose_json"
-                        )
-                    raw_segs = getattr(trans, "segments", None) or (trans.get("segments", []) if isinstance(trans, dict) else [])
-                    segs = merge_close_whisper_segments(raw_segs)
-                    gemini_client = genai.Client(api_key=gemini_key.strip())
-                    translate_segments_recap_style(gemini_client, groq_client, gemini_model, segs, style_mode)
+                    status.write("🎧 **၁/၄ - မြန်မာ Script စတင်ထုတ်ယူနေပါသည်...**")
+                    segs = extract_and_translate_pipeline(
+                        video_path=video_temp_path,
+                        groq_key=groq_key,
+                        gemini_key=gemini_key,
+                        gemini_model=gemini_model,
+                        style_mode=style_mode,
+                        log_fn=status.write
+                    )
                     st.session_state["script_segments"] = segs
 
                 segments = st.session_state["script_segments"]
 
-                status.write("🗣️ ၂/၄ - Voiceover အသံများ ထုတ်ယူနေပါသည်...")
+                status.write(f"🗣️ **၂/၄ - မြန်မာ Voiceover အသံ ({len(segments)} ကြောင်း) ထုတ်ယူနေပါသည်...**")
                 tts_res = asyncio.run(
                     synthesize_all_tts(segments, v_cfg["voice"], f"{int(extra_speed):+d}%", f"{int(extra_pitch):+d}Hz")
                 )
@@ -1130,7 +1198,7 @@ with st.container(border=True):
                     segments[idx]["wav"] = wav_p
                     segments[idx]["tts_dur"] = tdur
 
-                status.write("📝 ၃/၄ - မြန်မာစာတန်းထိုးနှင့် အသံ Timing ချိန်ညှိနေပါသည်...")
+                status.write("📝 **၃/၄ - မြန်မာစာတန်းထိုးနှင့် အသံ Timing ချိန်ညှိနေပါသည်...**")
                 timeline, cursor = [], 0.0
                 for seg in segments:
                     s_start = max(cursor, seg["start"] + audio_offset_sec)
@@ -1182,10 +1250,9 @@ with st.container(border=True):
                     "-ar", "44100", "-b:a", "128k", final_audio
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-                status.write(f"🎞️ ၄/၄ - HD Video ({vid_w}x{vid_h}) ကို အမြန်နှုန်းမြှင့်တင်စနစ်ဖြင့် ပေါင်းစပ်နေပါသည်...")
+                status.write(f"🎞️ **၄/၄ - HD Video ({vid_w}x{vid_h}) ကို ပေါင်းစပ်နေပါသည်...**")
                 p_bar = st.progress(0.0)
 
-                # လက်ဖြင့် ရွှေ့ထားသော Blur နှင့် စာတန်းထိုး နေရာများကို Target Video Resolution သို့ အချိုးကျ ပြန်တွက်ခြင်း
                 sx = vid_w / float(disp_w)
                 sy = vid_h / float(disp_h)
 
@@ -1240,8 +1307,9 @@ with st.container(border=True):
                 status.update(label="✅ Recap Video အောင်မြင်စွာ ထုတ်ပြီးပါပြီ!", state="complete", expanded=False)
 
             except Exception as e:
-                status.update(label="❌ Error ဖြစ်ပွားပါသည်", state="error")
-                st.error(f"Error အသေးစိတ်: {e}")
+                status.update(label="❌ Error ဖြစ်ပွားပါသည် (အောက်တွင် အသေးစိတ်ကြည့်ပါ)", state="error", expanded=True)
+                st.error(f"**Error အသေးစိတ်:**\n{e}")
+                st.code(traceback.format_exc())
 
     if "final_srt_content" in st.session_state and st.session_state["final_srt_content"]:
         st.download_button(
