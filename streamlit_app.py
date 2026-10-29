@@ -596,15 +596,17 @@ def render_recapmm_final_video(
     raw_out_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
     web_ready_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4").name
 
-    vf_chain = [f"fps={vid_fps:.2f}"]
+    # FPS ကို 24fps သို့ ကန့်သတ်ခြင်းဖြင့် ကြည်လင်မှုမပျက်ဘဲ Render ပိုမြန်စေသည်
+    target_fps = min(24.0, vid_fps)
+    vf_chain = [f"fps={target_fps:.2f}"]
     if mirror_vid:
         vf_chain.append("hflip")
 
     if zoom_pct > 100:
         zf = zoom_pct / 100.0
-        vf_chain.append(f"scale=iw*{zf:.3f}:ih*{zf:.3f},crop=iw/{zf:.3f}:ih/{zf:.3f}")
+        vf_chain.append(f"scale=iw*{zf:.3f}:ih*{zf:.3f}:flags=fast_bilinear,crop=iw/{zf:.3f}:ih/{zf:.3f}")
 
-    vf_chain.append(f"scale={vid_w}:{vid_h}:flags=bicubic,setsar=1")
+    vf_chain.append(f"scale={vid_w}:{vid_h}:flags=fast_bilinear,setsar=1")
 
     if abs(brightness_val) > 0.01 or abs(contrast_val - 1.0) > 0.01 or abs(saturation_val - 1.0) > 0.01:
         vf_chain.append(f"eq=brightness={brightness_val:.2f}:contrast={contrast_val:.2f}:saturation={saturation_val:.2f}")
@@ -614,10 +616,11 @@ def render_recapmm_final_video(
 
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
     if enable_blur and blur_opacity_pct > 0 and bx_w >= 8 and bx_h >= 8:
-        sigma_val = max(3.0, 22.0 * (blur_opacity_pct / 100.0))
+        # gblur အစား အဆပေါင်းများစွာ ပိုမြန်သော boxblur ကို သုံးထားသည်
+        luma_r = max(2, min(int(min(bx_w, bx_h) / 4), int(14 * (blur_opacity_pct / 100.0))))
         decode_vf = (
             f"{base_vf_str},split=2[vm][vc];"
-            f"[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},gblur=sigma={sigma_val:.1f},"
+            f"[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},boxblur={luma_r}:1,"
             f"eq=brightness=-0.16:contrast=0.92[vb];"
             f"[vm][vb]overlay={bx_x}:{bx_y}"
         )
@@ -626,16 +629,15 @@ def render_recapmm_final_video(
 
     sub_cx, sub_cy = sub_center_norm
 
-    decoder_cmd = ["ffmpeg", "-v", "error", "-i", video_path, "-vf", decode_vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
-    # Resolution အကြည်လင်ဆုံးနှင့် MB ဖိုင်ဆိုဒ် အနည်းဆုံး (CRF 24 + Maxrate 2.2Mbps)
+    decoder_cmd = ["ffmpeg", "-v", "error", "-threads", "2", "-i", video_path, "-vf", decode_vf, "-f", "rawvideo", "-pix_fmt", "rgb24", "pipe:1"]
     encoder_cmd = [
         "ffmpeg", "-y", "-v", "error",
         "-f", "rawvideo", "-vcodec", "rawvideo",
-        "-s", f"{vid_w}x{vid_h}", "-pix_fmt", "rgb24", "-r", f"{vid_fps:.2f}",
+        "-s", f"{vid_w}x{vid_h}", "-pix_fmt", "rgb24", "-r", f"{target_fps:.2f}",
         "-i", "pipe:0",
-        "-c:v", "libx264", "-preset", "veryfast", "-crf", "24",
+        "-c:v", "libx264", "-preset", "ultrafast", "-crf", "25",
         "-maxrate", "2200k", "-bufsize", "4400k",
-        "-profile:v", "main", "-pix_fmt", "yuv420p", "-threads", "2",
+        "-profile:v", "main", "-pix_fmt", "yuv420p", "-threads", "0",
         raw_out_video
     ]
 
@@ -644,7 +646,7 @@ def render_recapmm_final_video(
 
     frame_bytes_len = vid_w * vid_h * 3
     total_out_dur = sum(item["target_dur"] for item in timeline)
-    total_out_frames = max(1, int(round(total_out_dur * vid_fps)))
+    total_out_frames = max(1, int(round(total_out_dur * target_fps)))
 
     out_cursor = 0.0
     time_segments = []
@@ -653,21 +655,39 @@ def render_recapmm_final_video(
         time_segments.append({"out_start": out_cursor, "out_end": out_cursor + td, "in_start": item["v_start"], "in_end": item["v_end"]})
         out_cursor += td
 
+    # NumPy Fast Blending အတွက် Watermark နှင့် Subtitle များကို ကြိုတင်တွက်ချက်ထားခြင်း (Pre-computation)
+    wm_np = None
+    if wm_rgba is not None:
+        wx = min(max(6, int((vid_w - wm_rgba.width) * (wm_x_pct / 100.0))), vid_w - wm_rgba.width - 6)
+        wy = min(max(6, int((vid_h - wm_rgba.height) * (wm_y_pct / 100.0))), vid_h - wm_rgba.height - 6)
+        wm_arr = np.array(wm_rgba, dtype=np.float32)
+        wm_alpha = wm_arr[:, :, 3:4] / 255.0
+        wm_rgb = wm_arr[:, :, :3]
+        wm_np = (wy, wy + wm_rgba.height, wx, wx + wm_rgba.width, wm_rgb, wm_alpha)
+
+    for sub in sub_overlays:
+        s_img = sub["img"]
+        ox = min(max(4, sub_cx - (s_img.width // 2)), vid_w - s_img.width - 4)
+        oy = min(max(4, sub_cy - (s_img.height // 2)), vid_h - s_img.height - 4)
+        s_arr = np.array(s_img, dtype=np.float32)
+        s_alpha = s_arr[:, :, 3:4] / 255.0
+        s_rgb = s_arr[:, :, :3]
+        sub["np_data"] = (oy, oy + s_img.height, ox, ox + s_img.width, s_rgb, s_alpha)
+
     curr_in_frame_idx = -1
     curr_in_frame_bytes = None
+    last_in_idx = -1
+    last_active_sub = None
+    cached_out_bytes = None
+
     eof_reached = False
     seg_ptr = 0
     sub_ptr = 0
     num_subs = len(sub_overlays)
     frames_written = 0
 
-    wx, wy = 0, 0
-    if wm_rgba is not None:
-        wx = min(max(6, int((vid_w - wm_rgba.width) * (wm_x_pct / 100.0))), vid_w - wm_rgba.width - 6)
-        wy = min(max(6, int((vid_h - wm_rgba.height) * (wm_y_pct / 100.0))), vid_h - wm_rgba.height - 6)
-
     for out_idx in range(total_out_frames):
-        t_out = out_idx / float(vid_fps)
+        t_out = out_idx / float(target_fps)
         while seg_ptr < len(time_segments) - 1 and t_out >= time_segments[seg_ptr]["out_end"]:
             seg_ptr += 1
         seg = time_segments[seg_ptr]
@@ -675,7 +695,7 @@ def render_recapmm_final_video(
         seg_out_dur = max(0.001, seg["out_end"] - seg["out_start"])
         ratio = min(1.0, max(0.0, (t_out - seg["out_start"]) / seg_out_dur))
         t_in = seg["in_start"] + ratio * (seg["in_end"] - seg["in_start"])
-        target_in_idx = max(0, int(round(t_in * vid_fps)))
+        target_in_idx = max(0, int(round(t_in * target_fps)))
 
         while not eof_reached and curr_in_frame_idx < target_in_idx:
             raw = dec_proc.stdout.read(frame_bytes_len)
@@ -695,18 +715,27 @@ def render_recapmm_final_video(
             if sub_ptr < num_subs and sub_overlays[sub_ptr]["start"] <= t_out <= sub_overlays[sub_ptr]["end"]:
                 active_sub = sub_overlays[sub_ptr]
 
-        if active_sub is not None or wm_rgba is not None:
-            frame_img = Image.frombytes("RGB", (vid_w, vid_h), curr_in_frame_bytes)
-            if wm_rgba is not None:
-                frame_img.paste(wm_rgba, (wx, wy), wm_rgba)
-            if active_sub is not None:
-                sub_rgba = active_sub["img"]
-                ox = min(max(4, sub_cx - (sub_rgba.width // 2)), vid_w - sub_rgba.width - 4)
-                oy = min(max(4, sub_cy - (sub_rgba.height // 2)), vid_h - sub_rgba.height - 4)
-                frame_img.paste(sub_rgba, (ox, oy), sub_rgba)
-            frame_to_write = frame_img.tobytes()
+        # Frame အသစ် သို့မဟုတ် စာတန်းအပြောင်းအလဲရှိမှသာ တွက်ချက်မည် (Duplicate Frames များကို တန်းကျော်မည်)
+        if curr_in_frame_idx == last_in_idx and active_sub is last_active_sub and cached_out_bytes is not None:
+            frame_to_write = cached_out_bytes
         else:
-            frame_to_write = curr_in_frame_bytes
+            if active_sub is not None or wm_np is not None:
+                frame_arr = np.frombuffer(curr_in_frame_bytes, dtype=np.uint8).reshape((vid_h, vid_w, 3)).copy()
+                if wm_np is not None:
+                    y1, y2, x1, x2, rgb, alpha = wm_np
+                    roi = frame_arr[y1:y2, x1:x2].astype(np.float32)
+                    frame_arr[y1:y2, x1:x2] = (roi * (1.0 - alpha) + rgb * alpha).astype(np.uint8)
+                if active_sub is not None:
+                    y1, y2, x1, x2, rgb, alpha = active_sub["np_data"]
+                    roi = frame_arr[y1:y2, x1:x2].astype(np.float32)
+                    frame_arr[y1:y2, x1:x2] = (roi * (1.0 - alpha) + rgb * alpha).astype(np.uint8)
+                frame_to_write = frame_arr.tobytes()
+            else:
+                frame_to_write = curr_in_frame_bytes
+
+            last_in_idx = curr_in_frame_idx
+            last_active_sub = active_sub
+            cached_out_bytes = frame_to_write
 
         try:
             enc_proc.stdin.write(frame_to_write)
@@ -714,7 +743,7 @@ def render_recapmm_final_video(
         except BrokenPipeError:
             break
 
-        if out_idx % 25 == 0:
+        if out_idx % 30 == 0:
             progress_bar.progress(min(0.95, out_idx / float(total_out_frames)))
 
     try:
@@ -1153,7 +1182,7 @@ with st.container(border=True):
                     "-ar", "44100", "-b:a", "128k", final_audio
                 ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
 
-                status.write(f"🎞️ ၄/၄ - HD Video ({vid_w}x{vid_h}) ကို MB ဖိုင်ဆိုဒ်အနည်းဆုံးဖြင့် ပေါင်းစပ်နေပါသည်...")
+                status.write(f"🎞️ ၄/၄ - HD Video ({vid_w}x{vid_h}) ကို အမြန်နှုန်းမြှင့်တင်စနစ်ဖြင့် ပေါင်းစပ်နေပါသည်...")
                 p_bar = st.progress(0.0)
 
                 # လက်ဖြင့် ရွှေ့ထားသော Blur နှင့် စာတန်းထိုး နေရာများကို Target Video Resolution သို့ အချိုးကျ ပြန်တွက်ခြင်း
@@ -1232,4 +1261,4 @@ with st.container(border=True):
             file_name="RecapMM_Video.mp4",
             mime="video/mp4",
             use_container_width=True
-)
+    )
