@@ -6,9 +6,10 @@ import asyncio
 import subprocess
 import tempfile
 import traceback
+import urllib.request
 from io import BytesIO
 import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 import streamlit as st
 from streamlit_cropper import st_cropper
 from groq import Groq
@@ -167,11 +168,25 @@ COLOR_PRESETS = {
     "🌸 ပန်းရောင်": "#F472B6"
 }
 
+POSTER_COLOR_PRESETS = {
+    "🟡 ရွှေဝါရောင် (Gold Poster)": ("#FFD700", "#FFFBEB"),
+    "⚪ အဖြူရောင် (Classic White)": ("#FFFFFF", "#E2E8F0"),
+    "🔴 အနီရောင် (Action Crimson)": ("#FF3B30", "#FFFFFF"),
+    "🔵 အပြာနုရောင် (Sci-Fi Cyan)": ("#38BDF8", "#FFFFFF")
+}
+
 FONT_CHOICES = [
     "Noto Sans (မင်္ဂလာပါ)",
+    "Noto Serif (မင်္ဂလာပါ - Movie Poster ဖောင့်)",
     "Padauk (မင်္ဂလာပါ)",
     "AJ 02 / Masterpiece (Custom .ttf)"
 ]
+
+THUMBNAIL_ASPECT_RATIOS = {
+    "📱 TikTok & Reels (9:16 - ဒေါင်လိုက်)": "9:16",
+    "📺 YouTube (16:9 - အလျားလိုက်)": "16:9",
+    "🎞️ မူရင်း Video အချိုးအတိုင်း": "orig"
+}
 
 def hex_to_rgba(hex_color: str, alpha: int = 255) -> tuple:
     hex_color = hex_color.lstrip("#")
@@ -192,7 +207,7 @@ def clean_text_for_myanmar_font(text: str) -> str:
         text = text.replace(k, v)
     eng_to_mm_digits = str.maketrans("0123456789", "၀၁၂၃၄၅၆၇၈၉")
     text = text.translate(eng_to_mm_digits)
-    text = re.sub(r"[^\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FFa-zA-Z\s,\.\!\?\(\)\-\+/\:]", "", text)
+    text = re.sub(r"[^\u1000-\u109F\uAA60-\uAA7F\uA9E0-\uA9FFa-zA-Z0-9\s,\.\!\?\(\)\-\+/\:]", "", text)
     return re.sub(r"\s+", " ", text).strip()
 
 def register_uploaded_font(uploaded_file) -> str:
@@ -204,14 +219,45 @@ def register_uploaded_font(uploaded_file) -> str:
     subprocess.run(["fc-cache", "-f", USER_FONT_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return dest_path
 
+@st.cache_resource(show_spinner=False)
+def ensure_noto_serif_myanmar() -> str:
+    system_paths = [
+        "/usr/share/fonts/truetype/noto/NotoSerifMyanmar-Bold.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSerifMyanmar-Regular.ttf",
+        os.path.join(USER_FONT_DIR, "NotoSerifMyanmar-Bold.ttf")
+    ]
+    for p in system_paths:
+        if os.path.exists(p) and os.path.getsize(p) > 1000:
+            return p
+
+    res = subprocess.run(["fc-match", "-f", "%{file}", "Noto Serif Myanmar:style=Bold"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    matched = res.stdout.strip()
+    if matched and os.path.exists(matched) and "Serif" in matched:
+        return matched
+
+    local_dest = os.path.join(USER_FONT_DIR, "NotoSerifMyanmar-Bold.ttf")
+    try:
+        url = "https://github.com/googlefonts/noto-fonts/raw/main/hinted/ttf/NotoSerifMyanmar/NotoSerifMyanmar-Bold.ttf"
+        urllib.request.urlretrieve(url, local_dest)
+        if os.path.exists(local_dest) and os.path.getsize(local_dest) > 1000:
+            subprocess.run(["fc-cache", "-f", USER_FONT_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return local_dest
+    except Exception:
+        pass
+    return "/usr/share/fonts/truetype/noto/NotoSansMyanmar-Bold.ttf"
+
 def find_font_path(font_choice: str, custom_font_path: str = None) -> str:
-    if custom_font_path and os.path.exists(custom_font_path):
+    if "Custom" in font_choice and custom_font_path and os.path.exists(custom_font_path):
         return custom_font_path
+    if "Noto Serif" in font_choice:
+        return ensure_noto_serif_myanmar()
     if "Padauk" in font_choice:
-        res = subprocess.run(["fc-match", "-f", "%{file}", "Padauk"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        res = subprocess.run(["fc-match", "-f", "%{file}", "Padauk:style=Bold"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         if res.stdout.strip() and os.path.exists(res.stdout.strip()):
             return res.stdout.strip()
-    res = subprocess.run(["fc-match", "-f", "%{file}", "Noto Sans Myanmar"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if custom_font_path and os.path.exists(custom_font_path):
+        return custom_font_path
+    res = subprocess.run(["fc-match", "-f", "%{file}", "Noto Sans Myanmar:style=Bold"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     fpath = res.stdout.strip()
     if fpath and os.path.exists(fpath):
         return fpath
@@ -304,6 +350,218 @@ def extract_frame_bytes(video_path: str, time_sec: float, file_size: int) -> byt
         return data
     return b""
 
+def crop_and_resize_to_aspect(img: Image.Image, aspect_code: str) -> Image.Image:
+    """ပုံကို YouTube (16:9) သို့မဟုတ် TikTok/Reels (9:16) အချိုးသို့ Smart Center Crop ဖြတ်ပေးခြင်း"""
+    w, h = img.size
+    if aspect_code == "16:9":
+        target_w, target_h = 1280, 720
+    elif aspect_code == "9:16":
+        target_w, target_h = 720, 1280
+    else:
+        target_w = 720 if w <= h else 1280
+        target_h = int(round(h * (target_w / float(w))))
+        return img.resize((target_w, target_h), Image.LANCZOS)
+
+    target_ratio = target_w / float(target_h)
+    src_ratio = w / float(h)
+
+    if abs(src_ratio - target_ratio) > 0.02:
+        if src_ratio > target_ratio:
+            new_w = int(round(h * target_ratio))
+            left = (w - new_w) // 2
+            img = img.crop((left, 0, left + new_w, h))
+        else:
+            new_h = int(round(w / target_ratio))
+            top = int((h - new_h) * 0.35) # မျက်နှာများ မပြတ်စေရန် အပေါ်ပိုင်း 35% ကို ဦးစားပေးဖြတ်သည်
+            img = img.crop((0, top, w, top + new_h))
+
+    return img.resize((target_w, target_h), Image.LANCZOS)
+
+def wrap_poster_title_lines(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list:
+    raw_lines = [line.strip() for line in text.split("\n") if line.strip()]
+    if not raw_lines:
+        return []
+    dummy = ImageDraw.Draw(Image.new("RGBA", (10, 10)))
+    final_lines = []
+
+    for rline in raw_lines:
+        clean_l = clean_text_for_myanmar_font(rline) or rline
+        try:
+            bbox = dummy.textbbox((0, 0), clean_l, font=font)
+            line_w = bbox[2] - bbox[0]
+        except Exception:
+            line_w = len(clean_l) * 20
+
+        if line_w <= max_width:
+            final_lines.append(clean_l)
+        else:
+            tokens = re.split(r"(\s+|[၊။])", clean_l)
+            curr = ""
+            for tk in tokens:
+                if not tk:
+                    continue
+                test_str = (curr + tk).strip()
+                try:
+                    tb = dummy.textbbox((0, 0), test_str, font=font)
+                    tw = tb[2] - tb[0]
+                except Exception:
+                    tw = len(test_str) * 20
+                if tw <= max_width:
+                    curr = test_str
+                else:
+                    if curr:
+                        final_lines.append(curr)
+                    curr = tk.strip()
+            if curr:
+                final_lines.append(curr)
+    return final_lines[:3]
+
+def render_movie_poster_thumbnail(
+    frame_bytes: bytes,
+    title_text: str,
+    subtitle_tag: str,
+    font_path: str,
+    primary_hex: str,
+    secondary_hex: str,
+    aspect_code: str = "9:16",
+    title_size_pct: int = 100,
+    title_y_pct: int = 78,
+    mirror_vid: bool = False
+) -> bytes:
+    img = Image.open(BytesIO(frame_bytes)).convert("RGB")
+    if mirror_vid:
+        img = img.transpose(Image.FLIP_LEFT_RIGHT)
+
+    img = crop_and_resize_to_aspect(img, aspect_code)
+    target_w, target_h = img.size
+    ref_scale = min(target_w, target_h) / 720.0
+
+    # 1. Cinematic Color Grading
+    img = ImageEnhance.Contrast(img).enhance(1.16)
+    img = ImageEnhance.Color(img).enhance(1.18)
+    img = ImageEnhance.Sharpness(img).enhance(1.25)
+
+    # 2. Cinematic Dark Gradient & Vignette Overlay
+    y_grid = np.linspace(0.0, 1.0, target_h)[:, None]
+    x_grid = np.linspace(-1.0, 1.0, target_w)[None, :]
+
+    bottom_grad = np.clip((y_grid - 0.38) / 0.62, 0.0, 1.0) ** 1.45 * 230.0
+    top_grad = np.clip((0.24 - y_grid) / 0.24, 0.0, 1.0) ** 1.5 * 150.0
+    vignette = np.clip((x_grid ** 2 + (y_grid * 2.0 - 1.0) ** 2) - 0.35, 0.0, 1.0) * 85.0
+
+    alpha_mask = np.clip(np.maximum(bottom_grad, top_grad) + vignette, 0, 242).astype(np.uint8)
+    grad_rgba = np.zeros((target_h, target_w, 4), dtype=np.uint8)
+    grad_rgba[:, :, 0] = 6
+    grad_rgba[:, :, 1] = 9
+    grad_rgba[:, :, 2] = 15
+    grad_rgba[:, :, 3] = alpha_mask
+
+    poster_rgba = Image.alpha_composite(img.convert("RGBA"), Image.fromarray(grad_rgba, mode="RGBA"))
+
+    # 3. Cinematic Inner Frame
+    draw = ImageDraw.Draw(poster_rgba)
+    border_pad = int(min(target_w, target_h) * 0.028)
+    primary_rgba = hex_to_rgba(primary_hex, 135)
+    draw.rectangle(
+        [border_pad, border_pad, target_w - border_pad, target_h - border_pad],
+        outline=primary_rgba,
+        width=max(2, int(2 * ref_scale))
+    )
+
+    # 4. Top Movie Tagline
+    clean_tag = subtitle_tag.strip()
+    if clean_tag:
+        tag_px = max(15, int(22 * ref_scale))
+        try:
+            tag_font = ImageFont.truetype(font_path, tag_px)
+        except Exception:
+            tag_font = ImageFont.load_default()
+
+        tb = draw.textbbox((0, 0), clean_tag, font=tag_font)
+        tw, th = tb[2] - tb[0], tb[3] - tb[1]
+        tx = (target_w - tw) // 2
+        ty = int(target_h * 0.06)
+
+        pill_pad_x, pill_pad_y = int(18 * ref_scale), int(7 * ref_scale)
+        draw.rounded_rectangle(
+            [tx - pill_pad_x, ty - pill_pad_y, tx + tw + pill_pad_x, ty + th + pill_pad_y],
+            radius=int((th + pill_pad_y * 2) * 0.45),
+            fill=(15, 23, 42, 195),
+            outline=hex_to_rgba(primary_hex, 220),
+            width=2
+        )
+        draw.text((tx - tb[0], ty - tb[1]), clean_tag, font=tag_font, fill=hex_to_rgba(primary_hex, 255))
+
+    # 5. Main Movie Poster Title
+    if title_text.strip():
+        base_title_px = max(24, int(50 * (title_size_pct / 100.0) * ref_scale))
+        try:
+            title_font = ImageFont.truetype(font_path, base_title_px)
+        except Exception:
+            title_font = ImageFont.load_default()
+
+        max_text_w = int(target_w * 0.86)
+        lines = wrap_poster_title_lines(title_text, title_font, max_text_w)
+
+        line_metrics = []
+        for ln in lines:
+            lb = draw.textbbox((0, 0), ln, font=title_font)
+            line_metrics.append((ln, lb[2] - lb[0], lb[3] - lb[1], lb[0], lb[1]))
+
+        line_gap = int(base_title_px * 0.28)
+        total_block_h = sum(m[2] for m in line_metrics) + line_gap * max(0, len(line_metrics) - 1)
+        start_y = int((target_h * (title_y_pct / 100.0)) - (total_block_h / 2.0))
+        start_y = min(max(int(target_h * 0.14), start_y), target_h - total_block_h - border_pad - 16)
+
+        shadow_layer = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 0))
+        s_draw = ImageDraw.Draw(shadow_layer)
+        stroke_w = max(3, int(round(4.5 * ref_scale)))
+
+        curr_y = start_y
+        for idx, (ln, lw, lh, ox_off, oy_off) in enumerate(line_metrics):
+            lx = (target_w - lw) // 2 - ox_off
+            ly = curr_y - oy_off
+            s_draw.text(
+                (lx, ly + int(6 * ref_scale)),
+                ln,
+                font=title_font,
+                fill=(0, 0, 0, 230),
+                stroke_width=stroke_w + 4,
+                stroke_fill=(0, 0, 0, 230)
+            )
+            curr_y += lh + line_gap
+
+        shadow_layer = shadow_layer.filter(ImageFilter.GaussianBlur(radius=max(3, int(6 * ref_scale))))
+        poster_rgba = Image.alpha_composite(poster_rgba, shadow_layer)
+        draw = ImageDraw.Draw(poster_rgba)
+
+        curr_y = start_y
+        for idx, (ln, lw, lh, ox_off, oy_off) in enumerate(line_metrics):
+            lx = (target_w - lw) // 2 - ox_off
+            ly = curr_y - oy_off
+            fill_hex = primary_hex if idx == 0 else secondary_hex
+            draw.text(
+                (lx, ly),
+                ln,
+                font=title_font,
+                fill=hex_to_rgba(fill_hex, 255),
+                stroke_width=stroke_w,
+                stroke_fill=(0, 0, 0, 255)
+            )
+            curr_y += lh + line_gap
+
+        line_y = min(target_h - border_pad - 8, curr_y + int(10 * ref_scale))
+        bar_w = int(target_w * 0.34)
+        draw.rounded_rectangle(
+            [(target_w - bar_w) // 2, line_y, (target_w + bar_w) // 2, line_y + max(3, int(4 * ref_scale))],
+            radius=2,
+            fill=hex_to_rgba(primary_hex, 230)
+        )
+
+    out_buf = BytesIO()
+    poster_rgba.convert("RGB").save(out_buf, format="PNG", optimize=True)
+    return out_buf.getvalue()
+
 def render_myanmar_subtitle_rgba(
     text: str, font_path: str, size_scale_pct: int, vid_w: int,
     text_hex: str = "#38BDF8", pill_bg: bool = False
@@ -387,6 +645,9 @@ def build_touch_canvas_background(
     enable_blur: bool,
     blur_box_disp: tuple,
     blur_opacity_pct: int,
+    enable_vblur: bool,
+    vblur_box_disp: tuple,
+    vblur_opacity_pct: int,
     show_sub: bool,
     sub_center_disp: tuple,
     sample_text: str,
@@ -400,6 +661,7 @@ def build_touch_canvas_background(
         img = img.transpose(Image.FLIP_LEFT_RIGHT)
     img = img.resize((disp_w, disp_h), Image.LANCZOS)
 
+    # 1. အလျားလိုက် စာတန်း Blur (မူလ)
     bx_x, bx_y, bx_w, bx_h = blur_box_disp
     bx_x = min(max(0, bx_x), disp_w - 12)
     bx_y = min(max(0, bx_y), disp_h - 12)
@@ -417,6 +679,24 @@ def build_touch_canvas_background(
             draw = ImageDraw.Draw(img)
             draw.rounded_rectangle([bx_x, bx_y, bx_x + bx_w, bx_y + bx_h], radius=6, outline=(234, 88, 12, 200), width=2)
 
+    # 2. ဒေါင်လိုက် Blur အသစ် (လုံးဝ မမဲစေဘဲ Pure Clean Glass Blur)
+    vx_x, vx_y, vx_w, vx_h = vblur_box_disp
+    vx_x = min(max(0, vx_x), disp_w - 12)
+    vx_y = min(max(0, vx_y), disp_h - 12)
+    vx_w = min(max(12, vx_w), disp_w - vx_x)
+    vx_h = min(max(12, vx_h), disp_h - vx_y)
+
+    if enable_vblur and vblur_opacity_pct > 0:
+        vcrop = img.crop((vx_x, vx_y, vx_x + vx_w, vx_y + vx_h))
+        vblurred = vcrop.filter(ImageFilter.GaussianBlur(radius=max(3, int(14 * (vblur_opacity_pct / 100.0)))))
+        # မဲမနေစေရန် အနက်ရောင် Overlay လုံးဝမထည့်ဘဲ အလင်းကို မူရင်းအတိုင်း သန့်စင်စွာ ကပ်ပေးသည်
+        img.paste(vblurred, (vx_x, vx_y))
+
+        if active_mode != "vblur":
+            draw = ImageDraw.Draw(img)
+            draw.rounded_rectangle([vx_x, vx_y, vx_x + vx_w, vx_y + vx_h], radius=6, outline=(16, 185, 129, 220), width=2)
+
+    # 3. မြန်မာစာတန်းထိုး
     if show_sub:
         sub_rgba = render_myanmar_subtitle_rgba(sample_text, font_path, sub_size_pct, disp_w, sub_color_hex, pill_bg=False)
         sc_x, sc_y = sub_center_disp
@@ -466,9 +746,6 @@ def merge_close_whisper_segments(raw_segments: list, max_gap: float = 0.4, max_d
     return merged
 
 def discover_available_gemini_models(gemini_client, preferred_model: str) -> list:
-    """
-    Google API တွင် လက်ရှိ အမှန်တကယ် သုံး၍ရသော Gemini Model စာရင်းကို အလိုအလျောက် ရှာဖွေပေးခြင်း
-    """
     candidates = [
         preferred_model.strip(),
         "gemini-3.8-flash",
@@ -495,9 +772,6 @@ def discover_available_gemini_models(gemini_client, preferred_model: str) -> lis
     return chain
 
 def discover_available_groq_models(groq_client) -> list:
-    """
-    Groq API တွင် လက်ရှိ အမှန်တကယ် သုံး၍ရသော Chat Model စာရင်းကို အလိုအလျောက် ရှာဖွေပေးခြင်း
-    """
     candidates = []
     try:
         models_resp = groq_client.models.list()
@@ -510,7 +784,6 @@ def discover_available_groq_models(groq_client) -> list:
     except Exception:
         pass
 
-    # အရည်အသွေးမြင့် Model များကို ဦးစားပေးစီမည်
     preferred_order = sorted(
         candidates,
         key=lambda x: (0 if "70b" in x.lower() or "llama-4" in x.lower() or "qwen" in x.lower() or "deepseek" in x.lower() else 1)
@@ -523,13 +796,12 @@ def discover_available_groq_models(groq_client) -> list:
     return chain[:5]
 
 def extract_json_from_text(raw_txt: str):
-    """JSON String အတွင်းမှ List သို့မဟုတ် Dict ကို စိတ်ချရစွာ ဆွဲထုတ်ခြင်း"""
     raw_txt = raw_txt.strip()
     raw_txt = re.sub(r"^```(?:json)?\s*", "", raw_txt)
     raw_txt = re.sub(r"\s*```$", "", raw_txt)
     parsed = json.loads(raw_txt)
     if isinstance(parsed, dict):
-        for k in ("translations", "items", "data", "result", "lines"):
+        for k in ("translations", "items", "titles", "data", "result", "lines"):
             if k in parsed and isinstance(parsed[k], list):
                 return parsed[k]
         for v in parsed.values():
@@ -539,10 +811,81 @@ def extract_json_from_text(raw_txt: str):
         return parsed
     raise ValueError(f"JSON List ပုံစံ မဟုတ်ပါ: {type(parsed)}")
 
+def generate_ai_poster_titles(gemini_client, groq_client, preferred_model: str, segments: list) -> list:
+    """
+    Video အကြောင်းအရာကို ဖတ်ပြီး ဆွဲဆောင်မှုရှိသော ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး အလိုအလျောက် ရေးပေးခြင်း
+    """
+    summary_lines = [s.get("translated") or s.get("text", "") for s in segments[:35] if s.get("translated") or s.get("text")]
+    story_context = "\n".join(summary_lines)[:2500]
+    if not story_context.strip():
+        return [
+            "အတိတ်က လျှို့ဝှက်ချက်နှင့်\nနောက်ဆုံးတိုက်ပွဲ",
+            "ကံကြမ္မာကို ပြောင်းလဲခဲ့သူ၏\nအံ့ဖွယ်ဇာတ်လမ်း",
+            "ဘယ်သူမှ မထင်မှတ်ထားတဲ့\nအမှန်တရား"
+        ]
+
+    prompt = (
+        "Based on the following movie recap script in Burmese, generate 3 catchy, dramatic, and click-worthy "
+        "Burmese movie poster titles (ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် ၃ မျိုး). "
+        "Each title should be short (4 to 9 words), impactful, and formatted in 1 or 2 lines using '\\n'. "
+        "Do not use emojis or English words. Return ONLY a JSON object with key 'titles' containing a list of 3 strings:\n"
+        f"{story_context}"
+    )
+
+    gemini_chain = discover_available_gemini_models(gemini_client, preferred_model)
+    for model_name in gemini_chain:
+        try:
+            resp = gemini_client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    http_options=types.HttpOptions(timeout=20000)
+                )
+            )
+            raw_list = extract_json_from_text(resp.text or "")
+            cleaned_titles = []
+            for item in raw_list:
+                t_str = item.get("title", "") if isinstance(item, dict) else str(item)
+                lines = [clean_text_for_myanmar_font(ln) for ln in t_str.split("\n") if clean_text_for_myanmar_font(ln)]
+                if lines:
+                    cleaned_titles.append("\n".join(lines[:2]))
+            if len(cleaned_titles) >= 3:
+                return cleaned_titles[:3]
+        except Exception:
+            continue
+
+    groq_chain = discover_available_groq_models(groq_client)
+    for g_model in groq_chain:
+        try:
+            g_resp = groq_client.chat.completions.create(
+                model=g_model,
+                messages=[
+                    {"role": "system", "content": "You write dramatic Burmese movie poster titles. Output valid JSON only."},
+                    {"role": "user", "content": prompt}
+                ],
+                response_format={"type": "json_object"},
+                timeout=20.0
+            )
+            raw_list = extract_json_from_text(g_resp.choices[0].message.content)
+            cleaned_titles = []
+            for item in raw_list:
+                t_str = item.get("title", "") if isinstance(item, dict) else str(item)
+                lines = [clean_text_for_myanmar_font(ln) for ln in t_str.split("\n") if clean_text_for_myanmar_font(ln)]
+                if lines:
+                    cleaned_titles.append("\n".join(lines[:2]))
+            if len(cleaned_titles) >= 3:
+                return cleaned_titles[:3]
+        except Exception:
+            continue
+
+    return [
+        segments[0].get("translated", "အတိတ်က လျှို့ဝှက်ချက်နှင့်\nနောက်ဆုံးတိုက်ပွဲ"),
+        segments[min(1, len(segments) - 1)].get("translated", "ကံကြမ္မာကို ပြောင်းလဲခဲ့သူ"),
+        segments[min(2, len(segments) - 1)].get("translated", "မထင်မှတ်ထားသော အမှန်တရား")
+    ]
+
 def translate_segments_recap_style(gemini_client, groq_client, preferred_model: str, segments: list, style_mode: str, log_fn=None):
-    """
-    Auto Model Discovery + Timeout ပါဝင်သော ဘာသာပြန်စနစ်
-    """
     if style_mode == "third_person":
         style_instr = (
             "Rewrite and translate into natural Burmese (Myanmar) as a THIRD-PERSON movie recap narrator "
@@ -645,7 +988,7 @@ def translate_segments_recap_style(gemini_client, groq_client, preferred_model: 
                     f"• Groq Error: {last_groq_err}"
                 )
 
-def extract_and_translate_pipeline(video_path: str, groq_key: str, gemini_key: str, gemini_model: str, style_mode: str, log_fn=None) -> list:
+def extract_and_translate_pipeline(video_path: str, groq_key: str, gemini_key: str, gemini_model: str, style_mode: str, log_fn=None) -> tuple:
     if log_fn:
         log_fn("🎵 အဆင့် ၁(က) - Video ထဲမှ အသံဖိုင် (MP3) ထုတ်ယူနေပါသည်...")
     extracted_audio = extract_compressed_audio(video_path)
@@ -688,7 +1031,12 @@ def extract_and_translate_pipeline(video_path: str, groq_key: str, gemini_key: s
 
     gemini_client = genai.Client(api_key=gemini_key.strip())
     translate_segments_recap_style(gemini_client, groq_client, gemini_model, segs, style_mode, log_fn=log_fn)
-    return segs
+
+    if log_fn:
+        log_fn("🎬 AI ဖြင့် ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး အလိုအလျောက် ဖန်တီးနေပါသည်...")
+    ai_titles = generate_ai_poster_titles(gemini_client, groq_client, gemini_model, segs)
+
+    return segs, ai_titles
 
 async def synthesize_all_tts(segments, voice_id, rate_str, pitch_str):
     sem = asyncio.Semaphore(5)
@@ -743,6 +1091,9 @@ def render_recapmm_final_video(
     enable_blur: bool,
     blur_box_norm: tuple,
     blur_opacity_pct: int,
+    enable_vblur: bool,
+    vblur_box_norm: tuple,
+    vblur_opacity_pct: int,
     show_sub: bool,
     sub_center_norm: tuple,
     wm_rgba: Image.Image,
@@ -778,16 +1129,41 @@ def render_recapmm_final_video(
     base_vf_str = ",".join(vf_chain)
 
     bx_x, bx_y, bx_w, bx_h = blur_box_norm
-    if enable_blur and blur_opacity_pct > 0 and bx_w >= 8 and bx_h >= 8:
+    vx_x, vx_y, vx_w, vx_h = vblur_box_norm
+
+    use_hblur = enable_blur and blur_opacity_pct > 0 and bx_w >= 8 and bx_h >= 8
+    use_vblur = enable_vblur and vblur_opacity_pct > 0 and vx_w >= 8 and vx_h >= 8
+
+    # FFmpeg Filter Graph တွင် အလျားလိုက် Blur နှင့် ဒေါင်လိုက် Blur (အမဲမပါ) တို့ကို တည်ဆောက်ခြင်း
+    curr_pad = "[v0]"
+    filter_parts = [f"{base_vf_str}{curr_pad}"]
+
+    if use_hblur:
         luma_r = max(2, min(int(min(bx_w, bx_h) / 4), int(14 * (blur_opacity_pct / 100.0))))
-        decode_vf = (
-            f"{base_vf_str},split=2[vm][vc];"
-            f"[vc]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},boxblur={luma_r}:1,"
-            f"eq=brightness=-0.16:contrast=0.92[vb];"
-            f"[vm][vb]overlay={bx_x}:{bx_y}"
+        filter_parts.append(
+            f"{curr_pad}split=2[vm1][vc1];"
+            f"[vc1]crop={bx_w}:{bx_h}:{bx_x}:{bx_y},boxblur={luma_r}:1,"
+            f"eq=brightness=-0.16:contrast=0.92[vb1];"
+            f"[vm1][vb1]overlay={bx_x}:{bx_y}[v1]"
         )
-    else:
+        curr_pad = "[v1]"
+
+    if use_vblur:
+        # ဒေါင်လိုက် Blur သည် လုံးဝမဲမနေစေရန် eq darkening မထည့်ဘဲ သန့်စင်သော boxblur သာ သုံးထားသည်
+        vluma_r = max(2, min(int(min(vx_w, vx_h) / 4), int(16 * (vblur_opacity_pct / 100.0))))
+        filter_parts.append(
+            f"{curr_pad}split=2[vm2][vc2];"
+            f"[vc2]crop={vx_w}:{vx_h}:{vx_x}:{vx_y},boxblur={vluma_r}:1[vb2];"
+            f"[vm2][vb2]overlay={vx_x}:{vx_y}[v2]"
+        )
+        curr_pad = "[v2]"
+
+    if len(filter_parts) == 1:
         decode_vf = base_vf_str
+    else:
+        decode_vf = ";".join(filter_parts)
+        if decode_vf.endswith(curr_pad):
+            decode_vf = decode_vf[:-len(curr_pad)]
 
     sub_cx, sub_cy = sub_center_norm
 
@@ -976,12 +1352,22 @@ with st.sidebar:
 # ==================== SESSION STATE INITIALIZATION ====================
 if "enable_blur" not in st.session_state:
     st.session_state["enable_blur"] = True
+if "enable_vblur" not in st.session_state:
+    st.session_state["enable_vblur"] = False
 if "script_segments" not in st.session_state:
     st.session_state["script_segments"] = []
 if "blur_box_disp" not in st.session_state:
     st.session_state["blur_box_disp"] = (16, 300, 208, 42)
+if "vblur_box_disp" not in st.session_state:
+    st.session_state["vblur_box_disp"] = (185, 25, 42, 160)
 if "sub_center_disp" not in st.session_state:
     st.session_state["sub_center_disp"] = (120, 321)
+if "poster_title_1" not in st.session_state:
+    st.session_state["poster_title_1"] = "အတိတ်က လျှို့ဝှက်ချက်နှင့်\nနောက်ဆုံးတိုက်ပွဲ"
+if "poster_title_2" not in st.session_state:
+    st.session_state["poster_title_2"] = "ကံကြမ္မာကို ပြောင်းလဲခဲ့သူ၏\nအံ့ဖွယ်ဇာတ်လမ်း"
+if "poster_title_3" not in st.session_state:
+    st.session_state["poster_title_3"] = "ဘယ်သူမှ မထင်မှတ်ထားတဲ့\nအမှန်တရား"
 
 # ==================== TOP BAR & VIDEO UPLOAD ====================
 uploaded_video = st.file_uploader("📁 Recap ပြုလုပ်မည့် Video ဖိုင်ရွေးပါ", type=["mp4", "mov", "mkv", "webm"])
@@ -1014,38 +1400,58 @@ sub_size_pct = st.session_state.get("sub_size_state", 90)
 mirror_vid = st.session_state.get("mirror_state", False)
 show_sub = st.session_state.get("show_sub_state", True)
 
-# ==================== TOP INTERACTIVE TOUCH CANVAS (BLUR & SUBTITLE DRAG) ====================
+# ==================== TOP INTERACTIVE TOUCH CANVAS (BLUR, VERTICAL BLUR & SUBTITLE DRAG) ====================
 disp_w = 240 if orig_w <= orig_h else 320
 disp_h = int(round(orig_h * (disp_w / float(orig_w))))
 
 if video_temp_path:
     with st.container(border=True):
-        st.markdown("##### 🖐️ Video ပေါ်တွင် Blur နှင့် မြန်မာစာတန်းကို လက်ဖြင့် ဖိဆွဲ၍ ရွှေ့ပါ")
+        st.markdown("##### 🖐️ Video ပေါ်တွင် Blur (၂) ခုနှင့် မြန်မာစာတန်းကို လက်ဖြင့် ဖိဆွဲ၍ ရွှေ့ပါ")
 
         touch_target = st.radio(
             "လက်ဖြင့် ဆွဲရွှေ့မည့်အရာ ရွေးချယ်ပါ -",
-            ["🌫️ Blur ဘောင်ကို လက်ဖြင့်ရွှေ့မည်", "📝 မြန်မာစာတန်းကို လက်ဖြင့်ရွှေ့မည်"],
+            [
+                "🌫️ အလျားလိုက် Blur ရွှေ့မည်",
+                "💧 ဒေါင်လိုက် Blur (အမဲမပါ) ရွှေ့မည်",
+                "📝 မြန်မာစာတန်း ရွှေ့မည်"
+            ],
             horizontal=True
         )
-        active_mode = "blur" if "Blur" in touch_target else "sub"
+        if "ဒေါင်လိုက်" in touch_target:
+            active_mode = "vblur"
+        elif "အလျားလိုက်" in touch_target:
+            active_mode = "blur"
+        else:
+            active_mode = "sub"
 
         preview_sec = st.slider("⏱️ Video စက္ကန့်ရွှေ့ကြည့်ရန်", 0.0, max(1.0, float(vid_dur)), min(2.0, float(vid_dur)), 0.5)
 
-        b_col1, b_col2 = st.columns(2)
-        if b_col1.button("＋ စာတန်း Blur ထည့်မယ်", use_container_width=True):
+        b_col1, b_col2, b_col3 = st.columns(3)
+        if b_col1.button("＋ စာတန်း Blur", use_container_width=True):
             st.session_state["enable_blur"] = True
-        if b_col2.button("🗑️ Blur အားလုံးဖျက်", use_container_width=True):
+        if b_col2.button("＋ ဒေါင်လိုက် Blur", use_container_width=True):
+            st.session_state["enable_vblur"] = True
+        if b_col3.button("🗑️ Blur အားလုံးဖျက်", use_container_width=True):
             st.session_state["enable_blur"] = False
+            st.session_state["enable_vblur"] = False
 
-        blur_opacity_pct = st.slider("Blur အထူ (Opacity %)", 0, 100, 100 if st.session_state["enable_blur"] else 0, 5)
+        sl_c1, sl_c2 = st.columns(2)
+        blur_opacity_pct = sl_c1.slider("စာတန်း Blur အထူ (%)", 0, 100, 100 if st.session_state["enable_blur"] else 0, 5)
+        vblur_opacity_pct = sl_c2.slider("ဒေါင်လိုက် Blur အထူ (%)", 0, 100, 90 if st.session_state["enable_vblur"] else 0, 5)
 
         frame_bytes = extract_frame_bytes(video_temp_path, preview_sec, os.path.getsize(video_temp_path))
         if frame_bytes:
             sample_sub_txt = st.session_state["script_segments"][0]["translated"] if st.session_state.get("script_segments") else "ပြန်စရာအိမ်မရှိတော့တဲ့"
 
             cur_bx, cur_by, cur_bw, cur_bh = st.session_state["blur_box_disp"]
-            cur_by = min(max(10, cur_by), disp_h - 30)
-            cur_bh = min(max(18, cur_bh), disp_h - cur_by - 4)
+            cur_by = min(max(6, cur_by), disp_h - 24)
+            cur_bh = min(max(16, cur_bh), disp_h - cur_by - 4)
+
+            cur_vx, cur_vy, cur_vw, cur_vh = st.session_state["vblur_box_disp"]
+            cur_vx = min(max(6, cur_vx), disp_w - 24)
+            cur_vy = min(max(6, cur_vy), disp_h - 30)
+            cur_vw = min(max(16, cur_vw), disp_w - cur_vx - 4)
+            cur_vh = min(max(24, cur_vh), disp_h - cur_vy - 4)
 
             cur_sx, cur_sy = st.session_state["sub_center_disp"]
             cur_sy = min(max(15, cur_sy), disp_h - 15)
@@ -1058,6 +1464,9 @@ if video_temp_path:
                 enable_blur=st.session_state["enable_blur"],
                 blur_box_disp=(cur_bx, cur_by, cur_bw, cur_bh),
                 blur_opacity_pct=blur_opacity_pct,
+                enable_vblur=st.session_state["enable_vblur"],
+                vblur_box_disp=(cur_vx, cur_vy, cur_vw, cur_vh),
+                vblur_opacity_pct=vblur_opacity_pct,
                 show_sub=show_sub,
                 sub_center_disp=(cur_sx, cur_sy),
                 sample_text=sample_sub_txt,
@@ -1070,7 +1479,7 @@ if video_temp_path:
             pad_l, center_col, pad_r = st.columns([0.8, 2.4, 0.8])
             with center_col:
                 if active_mode == "blur":
-                    st.caption("🟧 **လိမ္မော်ရောင် Blur ဘောင်ကို လက်ဖြင့် ဖိဆွဲ၍ နေရာရွှေ့ပါ / ထောင့်မှ အကြီးအသေးချဲ့ပါ**")
+                    st.caption("🟧 **လိမ္မော်ရောင် အလျားလိုက် Blur ဘောင်ကို လက်ဖြင့် ဖိဆွဲ၍ နေရာရွှေ့ပါ / အကြီးအသေးချဲ့ပါ**")
                     def_coords = (cur_bx, min(disp_w - 4, cur_bx + cur_bw), cur_by, min(disp_h - 4, cur_by + cur_bh))
                     box_dict = st_cropper(
                         bg_pil,
@@ -1083,9 +1492,27 @@ if video_temp_path:
                     )
                     new_bx = max(0, int(box_dict["left"]))
                     new_by = max(0, int(box_dict["top"]))
-                    new_bw = max(16, int(box_dict["width"]))
+                    new_bw = max(14, int(box_dict["width"]))
                     new_bh = max(14, int(box_dict["height"]))
                     st.session_state["blur_box_disp"] = (new_bx, new_by, new_bw, new_bh)
+                elif active_mode == "vblur":
+                    st.caption("🟩 **အစိမ်းရောင် ဒေါင်လိုက် Blur (အမဲမပါ) ဘောင်ကို လက်ဖြင့် ဖိဆွဲ၍ နေရာရွှေ့ပါ / အကြီးအသေးချဲ့ပါ**")
+                    st.session_state["enable_vblur"] = True
+                    def_vcoords = (cur_vx, min(disp_w - 4, cur_vx + cur_vw), cur_vy, min(disp_h - 4, cur_vy + cur_vh))
+                    vbox_dict = st_cropper(
+                        bg_pil,
+                        realtime_update=True,
+                        box_color="#10B981",
+                        aspect_ratio=None,
+                        default_coords=def_vcoords,
+                        return_type="box",
+                        key="touch_drag_vblur"
+                    )
+                    new_vx = max(0, int(vbox_dict["left"]))
+                    new_vy = max(0, int(vbox_dict["top"]))
+                    new_vw = max(14, int(vbox_dict["width"]))
+                    new_vh = max(18, int(vbox_dict["height"]))
+                    st.session_state["vblur_box_disp"] = (new_vx, new_vy, new_vw, new_vh)
                 else:
                     st.caption("🟦 **အပြာရောင် စာတန်းဘောင်ကို လက်ဖြင့် ဖိဆွဲပြီး ထားချင်သည့်နေရာသို့ ရွှေ့ပါ**")
                     sub_box_w = int(disp_w * 0.82)
@@ -1107,6 +1534,7 @@ if video_temp_path:
                     st.session_state["sub_center_disp"] = (new_scx, new_scy)
 else:
     blur_opacity_pct = 100
+    vblur_opacity_pct = 90
 
 # ==================== CARD 1: မြန်မာဘာသာပြန် SCRIPT ====================
 with st.container(border=True):
@@ -1120,15 +1548,15 @@ with st.container(border=True):
     narration_label = st.radio("ဇာတ်ကြောင်းပုံစံ", list(NARRATION_STYLES.keys()), index=0)
     style_mode = NARRATION_STYLES[narration_label]
 
-    if st.button("🪄 Script ပြန်ထုတ်မယ်", type="primary", use_container_width=True):
+    if st.button("🪄 Script နှင့် Poster ခေါင်းစဉ် (၃) မျိုး ထုတ်မယ်", type="primary", use_container_width=True):
         if not video_temp_path:
             st.error("Video အရင်တင်ပေးပါ။")
         elif not groq_key or not gemini_key:
             st.error("Groq နှင့် Gemini API Key နှစ်ခုလုံး ထည့်ပေးပါ။")
         else:
-            s_box = st.status("⏳ မြန်မာ Script စတင်ထုတ်ယူနေပါသည်...", expanded=True)
+            s_box = st.status("⏳ မြန်မာ Script နှင့် Poster ခေါင်းစဉ်များ စတင်ထုတ်ယူနေပါသည်...", expanded=True)
             try:
-                segs = extract_and_translate_pipeline(
+                segs, ai_titles = extract_and_translate_pipeline(
                     video_path=video_temp_path,
                     groq_key=groq_key,
                     gemini_key=gemini_key,
@@ -1137,7 +1565,11 @@ with st.container(border=True):
                     log_fn=s_box.write
                 )
                 st.session_state["script_segments"] = segs
-                s_box.update(label=f"✅ စာကြောင်း ({len(segs)}) ကြောင်း အောင်မြင်စွာ ထုတ်ပြီးပါပြီ!", state="complete", expanded=False)
+                if len(ai_titles) >= 3:
+                    st.session_state["poster_title_1"] = ai_titles[0]
+                    st.session_state["poster_title_2"] = ai_titles[1]
+                    st.session_state["poster_title_3"] = ai_titles[2]
+                s_box.update(label=f"✅ စာကြောင်း ({len(segs)}) ကြောင်းနှင့် Poster ခေါင်းစဉ် (၃) မျိုး ထုတ်ပြီးပါပြီ!", state="complete", expanded=False)
                 st.rerun()
             except Exception as e:
                 s_box.update(label="❌ Script ထုတ်ရာတွင် Error တက်သွားပါသည်", state="error", expanded=True)
@@ -1206,15 +1638,16 @@ with st.container(border=True):
     mirror_vid = st.toggle("ဘယ်ညာ ပြောင်းပြန်လှည့် (Mirror - Copyright ကာကွယ်ရန်)", value=False, key="mirror_state")
     show_sub = st.toggle("မြန်မာစာတန်း video ထဲ ထည့်မယ်", value=True, key="show_sub_state")
 
-    font_choice = st.selectbox("ဖောင့် ရွေးချယ်ရန်", FONT_CHOICES, index=0, key="font_choice_state")
+    font_choice = st.selectbox("ဖောင့် ရွေးချယ်ရန် (Noto Sans / Noto Serif / Padauk)", FONT_CHOICES, index=0, key="font_choice_state")
     active_font_path = find_font_path(font_choice, custom_font_path)
 
     color_label = st.radio("စာလုံးအရောင်", list(COLOR_PRESETS.keys()), index=2, horizontal=True, key="color_label_state")
     sub_color_hex = COLOR_PRESETS[color_label]
 
     sub_size_pct = st.slider("စာလုံးအရွယ် (%)", 60, 140, 90, 5, key="sub_size_state")
-    if st.button("🔄 စာတန်းနှင့် Blur နေရာ မူလအတိုင်း ပြန်ထားမယ်"):
+    if st.button("🔄 စာတန်းနှင့် Blur (၂) ခုလုံး မူလနေရာ ပြန်ထားမယ်"):
         st.session_state["blur_box_disp"] = (int(disp_w * 0.08), int(disp_h * 0.74), int(disp_w * 0.84), int(disp_h * 0.11))
+        st.session_state["vblur_box_disp"] = (int(disp_w * 0.76), int(disp_h * 0.08), int(disp_w * 0.16), int(disp_h * 0.45))
         st.session_state["sub_center_disp"] = (disp_w // 2, int(disp_h * 0.79))
         st.rerun()
 
@@ -1245,7 +1678,7 @@ with st.container(border=True):
     st.markdown("""
     <div class="step-header">
         <div class="step-circle">4</div>
-        <div class="step-title">ထုတ်ယူမယ်</div>
+        <div class="step-title">Recap Video ထုတ်ယူမယ်</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1262,8 +1695,8 @@ with st.container(border=True):
                 vid_w, vid_h = calculate_target_resolution(orig_w, orig_h, res_choice)
 
                 if not st.session_state.get("script_segments"):
-                    status.write("🎧 **၁/၄ - မြန်မာ Script စတင်ထုတ်ယူနေပါသည်...**")
-                    segs = extract_and_translate_pipeline(
+                    status.write("🎧 **၁/၄ - မြန်မာ Script နှင့် Poster ခေါင်းစဉ်များ စတင်ထုတ်ယူနေပါသည်...**")
+                    segs, ai_titles = extract_and_translate_pipeline(
                         video_path=video_temp_path,
                         groq_key=groq_key,
                         gemini_key=gemini_key,
@@ -1272,6 +1705,10 @@ with st.container(border=True):
                         log_fn=status.write
                     )
                     st.session_state["script_segments"] = segs
+                    if len(ai_titles) >= 3:
+                        st.session_state["poster_title_1"] = ai_titles[0]
+                        st.session_state["poster_title_2"] = ai_titles[1]
+                        st.session_state["poster_title_3"] = ai_titles[2]
 
                 segments = st.session_state["script_segments"]
 
@@ -1349,6 +1786,14 @@ with st.container(border=True):
                     max(16, min(vid_h, int(dbh * sy)))
                 )
 
+                dvx, dvy, dvw, dvh = st.session_state["vblur_box_disp"]
+                norm_vblur_box = (
+                    min(max(0, int(dvx * sx)), vid_w - 16),
+                    min(max(0, int(dvy * sy)), vid_h - 16),
+                    max(16, min(vid_w, int(dvw * sx))),
+                    max(16, min(vid_h, int(dvh * sy)))
+                )
+
                 dsx, dsy = st.session_state["sub_center_disp"]
                 norm_sub_center = (
                     min(max(10, int(dsx * sx)), vid_w - 10),
@@ -1368,6 +1813,9 @@ with st.container(border=True):
                     enable_blur=st.session_state["enable_blur"],
                     blur_box_norm=norm_blur_box,
                     blur_opacity_pct=blur_opacity_pct,
+                    enable_vblur=st.session_state["enable_vblur"],
+                    vblur_box_norm=norm_vblur_box,
+                    vblur_opacity_pct=vblur_opacity_pct,
                     show_sub=show_sub,
                     sub_center_norm=norm_sub_center,
                     wm_rgba=wm_rgba,
@@ -1414,4 +1862,120 @@ with st.container(border=True):
             file_name="RecapMM_Video.mp4",
             mime="video/mp4",
             use_container_width=True
-    )
+        )
+
+# ==================== CARD 5: MOVIE POSTER THUMBNAIL GENERATOR (AI ခေါင်းစဉ် ၃ မျိုး + 16:9 / 9:16) ====================
+with st.container(border=True):
+    st.markdown("""
+    <div class="step-header">
+        <div class="step-circle">5</div>
+        <div class="step-title">🎬 Movie Poster Thumbnail (AI ခေါင်းစဉ် ၃ မျိုး & အချိုးရွေးရန်)</div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not video_temp_path:
+        st.info("📌 Video ဖိုင်တင်လိုက်သည်နှင့် Movie Poster ပုံစံ Thumbnail (၃) ပုံကို AI ခေါင်းစဉ် (၃) မျိုးဖြင့် ထုတ်ယူနိုင်ပါမည်။")
+    else:
+        aspect_label = st.radio(
+            "📐 Thumbnail အချိုးအစား (Aspect Ratio) ရွေးပါ -",
+            list(THUMBNAIL_ASPECT_RATIOS.keys()),
+            index=0,
+            horizontal=True
+        )
+        aspect_code = THUMBNAIL_ASPECT_RATIOS[aspect_label]
+
+        if st.button("🪄 AI ဖြင့် ဆွဲဆောင်မှုရှိသော ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး အော်တိုထုတ်မယ်", use_container_width=True):
+            if not groq_key and not gemini_key:
+                st.error("API Key အရင်ထည့်ပေးပါ။")
+            else:
+                with st.spinner("Gemini AI က Video အကြောင်းအရာကိုဖတ်ပြီး ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး ရေးပေးနေပါသည်..."):
+                    try:
+                        if not st.session_state.get("script_segments"):
+                            segs, ai_titles = extract_and_translate_pipeline(
+                                video_path=video_temp_path,
+                                groq_key=groq_key,
+                                gemini_key=gemini_key,
+                                gemini_model=gemini_model,
+                                style_mode=style_mode
+                            )
+                            st.session_state["script_segments"] = segs
+                        else:
+                            g_cli = genai.Client(api_key=gemini_key.strip())
+                            q_cli = Groq(api_key=groq_key.strip(), timeout=30.0)
+                            ai_titles = generate_ai_poster_titles(g_cli, q_cli, gemini_model, st.session_state["script_segments"])
+
+                        if len(ai_titles) >= 3:
+                            st.session_state["poster_title_1"] = ai_titles[0]
+                            st.session_state["poster_title_2"] = ai_titles[1]
+                            st.session_state["poster_title_3"] = ai_titles[2]
+                            st.rerun()
+                    except Exception as e:
+                        st.error(f"AI ခေါင်းစဉ်ထုတ်ရာတွင် Error တက်ပါသည်: {e}")
+
+        st.markdown("##### ✍️ ပုံ (၃) ပုံအတွက် ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး (စိတ်ကြိုက် ပြင်ရေးနိုင်သည်)")
+        t_col1, t_col2, t_col3 = st.columns(3)
+        title_1 = t_col1.text_area("ပုံ (၁) ခေါင်းစဉ်", key="poster_title_1", height=76)
+        title_2 = t_col2.text_area("ပုံ (၂) ခေါင်းစဉ်", key="poster_title_2", height=76)
+        title_3 = t_col3.text_area("ပုံ (၃) ခေါင်းစဉ်", key="poster_title_3", height=76)
+
+        p_col1, p_col2 = st.columns(2)
+        poster_tag = p_col1.text_input("အပေါ်ထိပ် စာတန်း (Tagline)", value="MOVIE RECAP")
+        poster_font_choice = p_col2.selectbox(
+            "Poster ဖောင့်ရွေးရန်",
+            FONT_CHOICES,
+            index=1,
+            key="poster_font_select"
+        )
+        poster_font_path = find_font_path(poster_font_choice, custom_font_path)
+
+        poster_color_label = st.radio(
+            "Poster စာလုံးအရောင် ဒီဇိုင်း",
+            list(POSTER_COLOR_PRESETS.keys()),
+            index=0,
+            horizontal=True
+        )
+        prim_hex, sec_hex = POSTER_COLOR_PRESETS[poster_color_label]
+
+        sc_1, sc_2 = st.columns(2)
+        poster_title_size = sc_1.slider("ခေါင်းစဉ် စာလုံးအရွယ် (%)", 60, 150, 100, 5)
+        poster_title_y = sc_2.slider("ခေါင်းစဉ် အပေါ်/အောက် နေရာ (%)", 20, 90, 78, 2)
+
+        max_d = max(1.0, float(vid_dur))
+        with st.expander("⏱️ ပုံ (၃) ပုံ ဖမ်းယူမည့် စက္ကန့်များကို စိတ်ကြိုက်ပြင်ရန်", expanded=False):
+            t1_sec = st.slider("ပုံ (၁) စက္ကန့်", 0.0, max_d, round(max_d * 0.20, 1), 0.5, key="thumb_t1")
+            t2_sec = st.slider("ပုံ (၂) စက္ကန့်", 0.0, max_d, round(max_d * 0.50, 1), 0.5, key="thumb_t2")
+            t3_sec = st.slider("ပုံ (၃) စက္ကန့်", 0.0, max_d, round(max_d * 0.80, 1), 0.5, key="thumb_t3")
+
+        fsize = os.path.getsize(video_temp_path)
+        thumb_configs = [
+            (t1_sec, title_1),
+            (t2_sec, title_2),
+            (t3_sec, title_3)
+        ]
+        cols = st.columns(3)
+
+        for idx, (col_ui, (t_sec, t_str)) in enumerate(zip(cols, thumb_configs), start=1):
+            raw_fb = extract_frame_bytes(video_temp_path, t_sec, fsize)
+            if raw_fb:
+                poster_png_bytes = render_movie_poster_thumbnail(
+                    frame_bytes=raw_fb,
+                    title_text=t_str,
+                    subtitle_tag=poster_tag,
+                    font_path=poster_font_path,
+                    primary_hex=prim_hex,
+                    secondary_hex=sec_hex,
+                    aspect_code=aspect_code,
+                    title_size_pct=poster_title_size,
+                    title_y_pct=poster_title_y,
+                    mirror_vid=mirror_vid
+                )
+                with col_ui:
+                    st.image(poster_png_bytes, caption=f"Poster #{idx} ({format_mm_ss(t_sec)})", use_container_width=True)
+                    st.download_button(
+                        f"📥 ပုံ ({idx}) ယူမယ်",
+                        data=poster_png_bytes,
+                        file_name=f"Movie_Poster_{idx}_{aspect_code.replace(':', 'x')}.png",
+                        mime="image/png",
+                        use_container_width=True,
+                        key=f"dl_poster_{idx}"
+            )
