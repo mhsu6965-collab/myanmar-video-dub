@@ -2,7 +2,9 @@ import os
 import re
 import json
 import time
+import shutil
 import asyncio
+import hashlib
 import subprocess
 import tempfile
 import traceback
@@ -214,9 +216,10 @@ def register_uploaded_font(uploaded_file) -> str:
     if uploaded_file is None:
         return None
     dest_path = os.path.join(USER_FONT_DIR, uploaded_file.name)
-    with open(dest_path, "wb") as f:
-        f.write(uploaded_file.getbuffer())
-    subprocess.run(["fc-cache", "-f", USER_FONT_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not os.path.exists(dest_path):
+        with open(dest_path, "wb") as f:
+            f.write(uploaded_file.getbuffer())
+        subprocess.run(["fc-cache", "-f", USER_FONT_DIR], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return dest_path
 
 @st.cache_resource(show_spinner=False)
@@ -288,6 +291,37 @@ def get_video_info(file_path: str):
     except Exception:
         return 720, 1280, 30.0, 0.0
 
+def save_uploaded_video_chunked(uploaded_file, dest_path: str):
+    """RAM မစားဘဲ ဖိုင်အကြီးများကို 4MB စီ ခွဲ၍ အမြန်သိမ်းဆည်းခြင်း"""
+    uploaded_file.seek(0)
+    with open(dest_path, "wb") as out_f:
+        shutil.copyfileobj(uploaded_file, out_f, length=4 * 1024 * 1024)
+
+def download_video_from_url(url: str) -> str:
+    """YouTube / TikTok / Facebook / Google Drive / Direct Link မှ Video ကို Server ပေါ်သို့ တိုက်ရိုက်ဆွဲယူခြင်း"""
+    url_hash = hashlib.md5(url.strip().encode("utf-8")).hexdigest()[:10]
+    dest_path = os.path.join(tempfile.gettempdir(), f"url_vid_{url_hash}.mp4")
+    if os.path.exists(dest_path) and os.path.getsize(dest_path) > 10000:
+        return dest_path
+
+    # yt-dlp ရှိပါက yt-dlp ဖြင့် ဦးစားပေး ဆွဲယူမည်
+    yt_cmd = [
+        "yt-dlp", "-f", "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best",
+        "--merge-output-format", "mp4", "--no-playlist", "-o", dest_path, url.strip()
+    ]
+    res = subprocess.run(yt_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    if res.returncode == 0 and os.path.exists(dest_path) and os.path.getsize(dest_path) > 10000:
+        return dest_path
+
+    # Direct MP4 URL အတွက် urllib ဖြင့် ဆွဲယူမည်
+    req = urllib.request.Request(url.strip(), headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=45) as resp, open(dest_path, "wb") as out_f:
+        shutil.copyfileobj(resp, out_f, length=4 * 1024 * 1024)
+
+    if not os.path.exists(dest_path) or os.path.getsize(dest_path) < 10000:
+        raise RuntimeError(f"Link မှ Video ဆွဲယူ၍ မရပါ။ (`requirements.txt` တွင် `yt-dlp` ထည့်ထားကြောင်း စစ်ဆေးပါ)\nအသေးစိတ်: {res.stderr[:250]}")
+    return dest_path
+
 def calculate_target_resolution(orig_w: int, orig_h: int, res_choice: str) -> tuple:
     if "1080p" in res_choice:
         target_short = 1080
@@ -339,10 +373,10 @@ def extract_compressed_audio(video_path: str) -> str:
         raise RuntimeError(f"Video ထဲမှ အသံထုတ်ယူမရပါ (Video တွင် အသံပါ/မပါ စစ်ဆေးပါ):\n{res.stderr}")
     return temp_audio
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, max_entries=15)
 def extract_frame_bytes(video_path: str, time_sec: float, file_size: int) -> bytes:
     frame_file = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg").name
-    subprocess.run(["ffmpeg", "-y", "-ss", f"{time_sec:.2f}", "-i", video_path, "-frames:v", "1", "-q:v", "2", frame_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    subprocess.run(["ffmpeg", "-y", "-ss", f"{time_sec:.2f}", "-i", video_path, "-frames:v", "1", "-q:v", "3", frame_file], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if os.path.exists(frame_file) and os.path.getsize(frame_file) > 0:
         with open(frame_file, "rb") as f:
             data = f.read()
@@ -351,7 +385,6 @@ def extract_frame_bytes(video_path: str, time_sec: float, file_size: int) -> byt
     return b""
 
 def crop_and_resize_to_aspect(img: Image.Image, aspect_code: str) -> Image.Image:
-    """ပုံကို YouTube (16:9) သို့မဟုတ် TikTok/Reels (9:16) အချိုးသို့ Smart Center Crop ဖြတ်ပေးခြင်း"""
     w, h = img.size
     if aspect_code == "16:9":
         target_w, target_h = 1280, 720
@@ -372,7 +405,7 @@ def crop_and_resize_to_aspect(img: Image.Image, aspect_code: str) -> Image.Image
             img = img.crop((left, 0, left + new_w, h))
         else:
             new_h = int(round(w / target_ratio))
-            top = int((h - new_h) * 0.35) # မျက်နှာများ မပြတ်စေရန် အပေါ်ပိုင်း 35% ကို ဦးစားပေးဖြတ်သည်
+            top = int((h - new_h) * 0.35)
             img = img.crop((0, top, w, top + new_h))
 
     return img.resize((target_w, target_h), Image.LANCZOS)
@@ -416,6 +449,7 @@ def wrap_poster_title_lines(text: str, font: ImageFont.FreeTypeFont, max_width: 
                 final_lines.append(curr)
     return final_lines[:3]
 
+@st.cache_data(show_spinner=False, max_entries=12)
 def render_movie_poster_thumbnail(
     frame_bytes: bytes,
     title_text: str,
@@ -436,12 +470,10 @@ def render_movie_poster_thumbnail(
     target_w, target_h = img.size
     ref_scale = min(target_w, target_h) / 720.0
 
-    # 1. Cinematic Color Grading
     img = ImageEnhance.Contrast(img).enhance(1.16)
     img = ImageEnhance.Color(img).enhance(1.18)
     img = ImageEnhance.Sharpness(img).enhance(1.25)
 
-    # 2. Cinematic Dark Gradient & Vignette Overlay
     y_grid = np.linspace(0.0, 1.0, target_h)[:, None]
     x_grid = np.linspace(-1.0, 1.0, target_w)[None, :]
 
@@ -458,7 +490,6 @@ def render_movie_poster_thumbnail(
 
     poster_rgba = Image.alpha_composite(img.convert("RGBA"), Image.fromarray(grad_rgba, mode="RGBA"))
 
-    # 3. Cinematic Inner Frame
     draw = ImageDraw.Draw(poster_rgba)
     border_pad = int(min(target_w, target_h) * 0.028)
     primary_rgba = hex_to_rgba(primary_hex, 135)
@@ -468,7 +499,6 @@ def render_movie_poster_thumbnail(
         width=max(2, int(2 * ref_scale))
     )
 
-    # 4. Top Movie Tagline
     clean_tag = subtitle_tag.strip()
     if clean_tag:
         tag_px = max(15, int(22 * ref_scale))
@@ -492,7 +522,6 @@ def render_movie_poster_thumbnail(
         )
         draw.text((tx - tb[0], ty - tb[1]), clean_tag, font=tag_font, fill=hex_to_rgba(primary_hex, 255))
 
-    # 5. Main Movie Poster Title
     if title_text.strip():
         base_title_px = max(24, int(50 * (title_size_pct / 100.0) * ref_scale))
         try:
@@ -661,7 +690,6 @@ def build_touch_canvas_background(
         img = img.transpose(Image.FLIP_LEFT_RIGHT)
     img = img.resize((disp_w, disp_h), Image.LANCZOS)
 
-    # 1. အလျားလိုက် စာတန်း Blur (မူလ)
     bx_x, bx_y, bx_w, bx_h = blur_box_disp
     bx_x = min(max(0, bx_x), disp_w - 12)
     bx_y = min(max(0, bx_y), disp_h - 12)
@@ -679,7 +707,6 @@ def build_touch_canvas_background(
             draw = ImageDraw.Draw(img)
             draw.rounded_rectangle([bx_x, bx_y, bx_x + bx_w, bx_y + bx_h], radius=6, outline=(234, 88, 12, 200), width=2)
 
-    # 2. ဒေါင်လိုက် Blur အသစ် (လုံးဝ မမဲစေဘဲ Pure Clean Glass Blur)
     vx_x, vx_y, vx_w, vx_h = vblur_box_disp
     vx_x = min(max(0, vx_x), disp_w - 12)
     vx_y = min(max(0, vx_y), disp_h - 12)
@@ -689,14 +716,12 @@ def build_touch_canvas_background(
     if enable_vblur and vblur_opacity_pct > 0:
         vcrop = img.crop((vx_x, vx_y, vx_x + vx_w, vx_y + vx_h))
         vblurred = vcrop.filter(ImageFilter.GaussianBlur(radius=max(3, int(14 * (vblur_opacity_pct / 100.0)))))
-        # မဲမနေစေရန် အနက်ရောင် Overlay လုံးဝမထည့်ဘဲ အလင်းကို မူရင်းအတိုင်း သန့်စင်စွာ ကပ်ပေးသည်
         img.paste(vblurred, (vx_x, vx_y))
 
         if active_mode != "vblur":
             draw = ImageDraw.Draw(img)
             draw.rounded_rectangle([vx_x, vx_y, vx_x + vx_w, vx_y + vx_h], radius=6, outline=(16, 185, 129, 220), width=2)
 
-    # 3. မြန်မာစာတန်းထိုး
     if show_sub:
         sub_rgba = render_myanmar_subtitle_rgba(sample_text, font_path, sub_size_pct, disp_w, sub_color_hex, pill_bg=False)
         sc_x, sc_y = sub_center_disp
@@ -812,9 +837,6 @@ def extract_json_from_text(raw_txt: str):
     raise ValueError(f"JSON List ပုံစံ မဟုတ်ပါ: {type(parsed)}")
 
 def generate_ai_poster_titles(gemini_client, groq_client, preferred_model: str, segments: list) -> list:
-    """
-    Video အကြောင်းအရာကို ဖတ်ပြီး ဆွဲဆောင်မှုရှိသော ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး အလိုအလျောက် ရေးပေးခြင်း
-    """
     summary_lines = [s.get("translated") or s.get("text", "") for s in segments[:35] if s.get("translated") or s.get("text")]
     story_context = "\n".join(summary_lines)[:2500]
     if not story_context.strip():
@@ -1134,7 +1156,6 @@ def render_recapmm_final_video(
     use_hblur = enable_blur and blur_opacity_pct > 0 and bx_w >= 8 and bx_h >= 8
     use_vblur = enable_vblur and vblur_opacity_pct > 0 and vx_w >= 8 and vx_h >= 8
 
-    # FFmpeg Filter Graph တွင် အလျားလိုက် Blur နှင့် ဒေါင်လိုက် Blur (အမဲမပါ) တို့ကို တည်ဆောက်ခြင်း
     curr_pad = "[v0]"
     filter_parts = [f"{base_vf_str}{curr_pad}"]
 
@@ -1149,7 +1170,6 @@ def render_recapmm_final_video(
         curr_pad = "[v1]"
 
     if use_vblur:
-        # ဒေါင်လိုက် Blur သည် လုံးဝမဲမနေစေရန် eq darkening မထည့်ဘဲ သန့်စင်သော boxblur သာ သုံးထားသည်
         vluma_r = max(2, min(int(min(vx_w, vx_h) / 4), int(16 * (vblur_opacity_pct / 100.0))))
         filter_parts.append(
             f"{curr_pad}split=2[vm2][vc2];"
@@ -1368,18 +1388,57 @@ if "poster_title_2" not in st.session_state:
     st.session_state["poster_title_2"] = "ကံကြမ္မာကို ပြောင်းလဲခဲ့သူ၏\nအံ့ဖွယ်ဇာတ်လမ်း"
 if "poster_title_3" not in st.session_state:
     st.session_state["poster_title_3"] = "ဘယ်သူမှ မထင်မှတ်ထားတဲ့\nအမှန်တရား"
+if "show_posters_now" not in st.session_state:
+    st.session_state["show_posters_now"] = False
 
-# ==================== TOP BAR & VIDEO UPLOAD ====================
-uploaded_video = st.file_uploader("📁 Recap ပြုလုပ်မည့် Video ဖိုင်ရွေးပါ", type=["mp4", "mov", "mkv", "webm"])
+# ==================== TOP BAR & DUAL VIDEO INPUT (UPLOAD OR FAST URL) ====================
+with st.container(border=True):
+    input_method = st.radio(
+        "📥 Video ထည့်သွင်းမည့် နည်းလမ်းရွေးပါ -",
+        ["📁 ဖုန်းထဲမှ Video တင်မည်", "🔗 Link ဖြင့် တင်မည် (Upload စောင့်စရာမလို - အမြန်ဆုံး)"],
+        horizontal=True
+    )
 
-video_temp_path = None
-orig_w, orig_h, vid_fps, vid_dur = 720, 1280, 30.0, 0.0
+    if "ဖုန်းထဲမှ" in input_method:
+        st.caption("💡 ဖုန်းလိုင်းနှေး၍ Upload ကြာနေပါက VPN ပိတ်၍တင်ပါ (သို့မဟုတ်) ဘေးက Link စနစ်ကို သုံးပါ။")
+        uploaded_video = st.file_uploader("📁 Recap ပြုလုပ်မည့် Video ဖိုင်ရွေးပါ", type=["mp4", "mov", "mkv", "webm"])
+        if uploaded_video is not None:
+            file_id = f"upload_{uploaded_video.name}_{uploaded_video.size}"
+            cached_path = os.path.join(tempfile.gettempdir(), f"recap_in_{uploaded_video.size}.mp4")
+            if st.session_state.get("active_video_id") != file_id or not os.path.exists(cached_path):
+                with st.spinner("⚡ Video ဖိုင်ကို အမြန်စနစ်ဖြင့် လက်ခံသိမ်းဆည်းနေပါသည်..."):
+                    save_uploaded_video_chunked(uploaded_video, cached_path)
+                    orig_w, orig_h, vid_fps, vid_dur = get_video_info(cached_path)
+                    st.session_state["active_video_id"] = file_id
+                    st.session_state["cached_video_path"] = cached_path
+                    st.session_state["cached_video_meta"] = (orig_w, orig_h, vid_fps, vid_dur)
+                    st.session_state["script_segments"] = []
+                    st.session_state["show_posters_now"] = False
+    else:
+        url_input = st.text_input("🔗 YouTube Shorts / TikTok / Facebook / Direct MP4 Link ထည့်ပါ")
+        if st.button("⚡ Link မှ Video တိုက်ရိုက်ဆွဲယူမယ်", type="primary", use_container_width=True):
+            if not url_input.strip():
+                st.error("ကျေးဇူးပြု၍ Video Link အရင်ထည့်ပေးပါ။")
+            else:
+                with st.spinner("🚀 Server မှ Video ကို အမြန်နှုန်းဖြင့် တိုက်ရိုက်ဆွဲယူနေပါသည်..."):
+                    try:
+                        dl_path = download_video_from_url(url_input)
+                        orig_w, orig_h, vid_fps, vid_dur = get_video_info(dl_path)
+                        st.session_state["active_video_id"] = f"url_{url_input.strip()}"
+                        st.session_state["cached_video_path"] = dl_path
+                        st.session_state["cached_video_meta"] = (orig_w, orig_h, vid_fps, vid_dur)
+                        st.session_state["script_segments"] = []
+                        st.session_state["show_posters_now"] = False
+                        st.success("✅ Video ဆွဲယူပြီးပါပြီ!")
+                    except Exception as e:
+                        st.error(f"Link ဆွဲယူရာတွင် Error ဖြစ်ပွားပါသည်: {e}")
 
-if uploaded_video:
-    video_temp_path = os.path.join(tempfile.gettempdir(), "input_source_video.mp4")
-    with open(video_temp_path, "wb") as f:
-        f.write(uploaded_video.getbuffer())
-    orig_w, orig_h, vid_fps, vid_dur = get_video_info(video_temp_path)
+video_temp_path = st.session_state.get("cached_video_path")
+if video_temp_path and os.path.exists(video_temp_path):
+    orig_w, orig_h, vid_fps, vid_dur = st.session_state.get("cached_video_meta", (720, 1280, 30.0, 0.0))
+else:
+    video_temp_path = None
+    orig_w, orig_h, vid_fps, vid_dur = 720, 1280, 30.0, 0.0
 
 st.markdown(f"""
 <div class="recap-topbar">
@@ -1569,6 +1628,7 @@ with st.container(border=True):
                     st.session_state["poster_title_1"] = ai_titles[0]
                     st.session_state["poster_title_2"] = ai_titles[1]
                     st.session_state["poster_title_3"] = ai_titles[2]
+                st.session_state["show_posters_now"] = True
                 s_box.update(label=f"✅ စာကြောင်း ({len(segs)}) ကြောင်းနှင့် Poster ခေါင်းစဉ် (၃) မျိုး ထုတ်ပြီးပါပြီ!", state="complete", expanded=False)
                 st.rerun()
             except Exception as e:
@@ -1864,7 +1924,7 @@ with st.container(border=True):
             use_container_width=True
         )
 
-# ==================== CARD 5: MOVIE POSTER THUMBNAIL GENERATOR (AI ခေါင်းစဉ် ၃ မျိုး + 16:9 / 9:16) ====================
+# ==================== CARD 5: MOVIE POSTER THUMBNAIL GENERATOR ====================
 with st.container(border=True):
     st.markdown("""
     <div class="step-header">
@@ -1884,11 +1944,15 @@ with st.container(border=True):
         )
         aspect_code = THUMBNAIL_ASPECT_RATIOS[aspect_label]
 
-        if st.button("🪄 AI ဖြင့် ဆွဲဆောင်မှုရှိသော ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး အော်တိုထုတ်မယ်", use_container_width=True):
+        btn_c1, btn_c2 = st.columns(2)
+        if btn_c1.button("🖼️ Poster (၃) ပုံ ကြည့်မယ် / ထုတ်မယ်", type="primary", use_container_width=True):
+            st.session_state["show_posters_now"] = True
+
+        if btn_c2.button("🪄 AI ခေါင်းစဉ် (၃) မျိုး အော်တိုရေးမယ်", use_container_width=True):
             if not groq_key and not gemini_key:
                 st.error("API Key အရင်ထည့်ပေးပါ။")
             else:
-                with st.spinner("Gemini AI က Video အကြောင်းအရာကိုဖတ်ပြီး ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး ရေးပေးနေပါသည်..."):
+                with st.spinner("Gemini AI က ရုပ်ရှင်ပိုစတာ ခေါင်းစဉ် (၃) မျိုး ရေးပေးနေပါသည်..."):
                     try:
                         if not st.session_state.get("script_segments"):
                             segs, ai_titles = extract_and_translate_pipeline(
@@ -1908,7 +1972,8 @@ with st.container(border=True):
                             st.session_state["poster_title_1"] = ai_titles[0]
                             st.session_state["poster_title_2"] = ai_titles[1]
                             st.session_state["poster_title_3"] = ai_titles[2]
-                            st.rerun()
+                        st.session_state["show_posters_now"] = True
+                        st.rerun()
                     except Exception as e:
                         st.error(f"AI ခေါင်းစဉ်ထုတ်ရာတွင် Error တက်ပါသည်: {e}")
 
@@ -1946,36 +2011,37 @@ with st.container(border=True):
             t2_sec = st.slider("ပုံ (၂) စက္ကန့်", 0.0, max_d, round(max_d * 0.50, 1), 0.5, key="thumb_t2")
             t3_sec = st.slider("ပုံ (၃) စက္ကန့်", 0.0, max_d, round(max_d * 0.80, 1), 0.5, key="thumb_t3")
 
-        fsize = os.path.getsize(video_temp_path)
-        thumb_configs = [
-            (t1_sec, title_1),
-            (t2_sec, title_2),
-            (t3_sec, title_3)
-        ]
-        cols = st.columns(3)
+        if st.session_state.get("show_posters_now"):
+            fsize = os.path.getsize(video_temp_path)
+            thumb_configs = [
+                (t1_sec, title_1),
+                (t2_sec, title_2),
+                (t3_sec, title_3)
+            ]
+            cols = st.columns(3)
 
-        for idx, (col_ui, (t_sec, t_str)) in enumerate(zip(cols, thumb_configs), start=1):
-            raw_fb = extract_frame_bytes(video_temp_path, t_sec, fsize)
-            if raw_fb:
-                poster_png_bytes = render_movie_poster_thumbnail(
-                    frame_bytes=raw_fb,
-                    title_text=t_str,
-                    subtitle_tag=poster_tag,
-                    font_path=poster_font_path,
-                    primary_hex=prim_hex,
-                    secondary_hex=sec_hex,
-                    aspect_code=aspect_code,
-                    title_size_pct=poster_title_size,
-                    title_y_pct=poster_title_y,
-                    mirror_vid=mirror_vid
-                )
-                with col_ui:
-                    st.image(poster_png_bytes, caption=f"Poster #{idx} ({format_mm_ss(t_sec)})", use_container_width=True)
-                    st.download_button(
-                        f"📥 ပုံ ({idx}) ယူမယ်",
-                        data=poster_png_bytes,
-                        file_name=f"Movie_Poster_{idx}_{aspect_code.replace(':', 'x')}.png",
-                        mime="image/png",
-                        use_container_width=True,
-                        key=f"dl_poster_{idx}"
-            )
+            for idx, (col_ui, (t_sec, t_str)) in enumerate(zip(cols, thumb_configs), start=1):
+                raw_fb = extract_frame_bytes(video_temp_path, t_sec, fsize)
+                if raw_fb:
+                    poster_png_bytes = render_movie_poster_thumbnail(
+                        frame_bytes=raw_fb,
+                        title_text=t_str,
+                        subtitle_tag=poster_tag,
+                        font_path=poster_font_path,
+                        primary_hex=prim_hex,
+                        secondary_hex=sec_hex,
+                        aspect_code=aspect_code,
+                        title_size_pct=poster_title_size,
+                        title_y_pct=poster_title_y,
+                        mirror_vid=mirror_vid
+                    )
+                    with col_ui:
+                        st.image(poster_png_bytes, caption=f"Poster #{idx} ({format_mm_ss(t_sec)})", use_container_width=True)
+                        st.download_button(
+                            f"📥 ပုံ ({idx}) ယူမယ်",
+                            data=poster_png_bytes,
+                            file_name=f"Movie_Poster_{idx}_{aspect_code.replace(':', 'x')}.png",
+                            mime="image/png",
+                            use_container_width=True,
+                            key=f"dl_poster_{idx}"
+        )
